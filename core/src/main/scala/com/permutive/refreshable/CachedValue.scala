@@ -16,10 +16,17 @@
 
 package com.permutive.refreshable
 
-import cats.effect.{IO, IOApp}
+private[refreshable] sealed trait CachedValue[A] {
+  def value: A
+  def map[B](f: A => B): CachedValue[B] = this match {
+    case CachedValue.Success(value)      => CachedValue.Success(f(value))
+    case CachedValue.Error(value, error) => CachedValue.Error(f(value), error)
+    case CachedValue.Cancelled(value)    => CachedValue.Cancelled(f(value))
+  }
+}
 
-object Main extends IOApp.Simple {
-
-  def run: IO[Unit] =
-    IO.println("Hello sbt-typelevel!")
+private[refreshable] object CachedValue {
+  case class Success[A](value: A) extends CachedValue[A]
+  case class Error[A](value: A, error: Throwable) extends CachedValue[A]
+  case class Cancelled[A](value: A) extends CachedValue[A]
 }
