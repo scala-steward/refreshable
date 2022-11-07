@@ -203,12 +203,12 @@ object Refreshable {
     } yield rv
   }
 
-  private[refreshable] def impl[F[_]: Temporal, A](
+  private def impl[F[_]: Temporal, A](
       refresh: F[A],
       cacheDuration: A => FiniteDuration,
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
+      onNewValue: Option[(A, FiniteDuration) => F[Unit]],
       getValue: F[CachedValue[A]],
       setValue: CachedValue[A] => F[Unit],
       updateValue: (CachedValue[A] => CachedValue[A]) => F[Unit],
