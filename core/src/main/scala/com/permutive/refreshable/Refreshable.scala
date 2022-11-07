@@ -268,7 +268,7 @@ object Refreshable {
             fiberRef.modify {
               case None => Some(fib) -> wait.complete(()).as(true)
               case curr @ Some(_) =>
-                curr -> (fib.cancel.start >> wait.complete(())).as(false)
+                curr -> (fib.cancel >> wait.complete(())).as(false)
             }.flatten
           }.uncancelable
         }
