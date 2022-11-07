@@ -17,6 +17,8 @@
 package com.permutive.refreshable
 
 import cats.effect._
+import cats.effect.testkit.TestControl
+import retry._
 import munit.CatsEffectSuite
 
 import scala.concurrent.duration._
@@ -53,6 +55,51 @@ class RefreshableSuite extends CatsEffectSuite {
         )
         .use_
         .intercept[Boom.type]
+    }
+
+    test("onRefreshFailure is invoked if refresh fails") {
+      val run = IO.ref(false).flatMap { ref =>
+        Refreshable
+          .resource[IO, Int](
+            refresh = IO.raiseError(Boom),
+            cacheDuration = _ => 1.second,
+            onRefreshFailure = _ => ref.set(true),
+            onExhaustedRetries = _ => IO.unit,
+            onNewValue = None,
+            defaultValue = Some(5),
+            retryPolicy = None
+          )
+          .use { _ =>
+            IO.sleep(2.seconds) >> ref.get.assertEquals(true)
+          }
+      }
+
+      TestControl.executeEmbed(run)
+    }
+
+    test("onExhaustedRetries is invoked if refresh policy is exhausted") {
+      val run = IO.ref(false).flatMap { ref =>
+        Refreshable
+          .resource[IO, Int](
+            refresh = IO.raiseError(Boom),
+            cacheDuration = _ => 1.second,
+            onRefreshFailure = _ => IO.unit,
+            onExhaustedRetries = _ => ref.set(true),
+            onNewValue = None,
+            defaultValue = Some(5),
+            retryPolicy = Some(
+              RetryPolicies
+                .constantDelay[IO](200.millis)
+                .join(RetryPolicies.limitRetries(1))
+            )
+          )
+          .use { _ =>
+            IO.sleep(2.seconds) >> ref.get.assertEquals(true)
+          }
+      }
+
+      TestControl.executeEmbed(run)
+
     }
   }
 
