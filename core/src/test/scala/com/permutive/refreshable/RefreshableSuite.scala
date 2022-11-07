@@ -27,19 +27,6 @@ import scala.concurrent.duration._
 
 class RefreshableSuite extends CatsEffectSuite {
 
-  trait RefreshableFactory {
-    def resource[A](
-        refresh: IO[A],
-        cacheDuration: A => FiniteDuration,
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
-        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
-        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
-        defaultValue: Option[A] = None,
-        retryPolicy: Option[RetryPolicy[IO]] = None
-    ): Resource[IO, Refreshable[IO, A]]
-
-  }
-
   def suite(factory: RefreshableFactory)(implicit loc: munit.Location): Unit = {
 
     test("Uses initial value if available") {
@@ -369,6 +356,19 @@ class RefreshableSuite extends CatsEffectSuite {
         retryPolicy
       )
       .map(_.mapK(FunctionK.id[IO]))
+  }
+
+  trait RefreshableFactory {
+    def resource[A](
+        refresh: IO[A],
+        cacheDuration: A => FiniteDuration,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
+        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
+        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        defaultValue: Option[A] = None,
+        retryPolicy: Option[RetryPolicy[IO]] = None
+    ): Resource[IO, Refreshable[IO, A]]
+
   }
 
   object Boom extends RuntimeException("BOOM")
