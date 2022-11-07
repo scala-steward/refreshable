@@ -58,11 +58,14 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("onRefreshFailure is invoked if refresh fails") {
+
+      val cacheTTL = 1.second
+
       val run = IO.ref(false).flatMap { ref =>
         Refreshable
           .resource[IO, Int](
             refresh = IO.raiseError(Boom),
-            cacheDuration = _ => 1.second,
+            cacheDuration = _ => cacheTTL,
             onRefreshFailure = _ => ref.set(true),
             onExhaustedRetries = _ => IO.unit,
             onNewValue = None,
@@ -70,7 +73,7 @@ class RefreshableSuite extends CatsEffectSuite {
             retryPolicy = None
           )
           .use { _ =>
-            IO.sleep(2.seconds) >> ref.get.assertEquals(true)
+            IO.sleep(cacheTTL * 2) >> ref.get.assertEquals(true)
           }
       }
 
@@ -78,23 +81,26 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("onExhaustedRetries is invoked if refresh policy is exhausted") {
+
+      val retryPeriod = 1.second
+
       val run = IO.ref(false).flatMap { ref =>
         Refreshable
           .resource[IO, Int](
             refresh = IO.raiseError(Boom),
-            cacheDuration = _ => 1.second,
+            cacheDuration = _ => 5.millis,
             onRefreshFailure = _ => IO.unit,
             onExhaustedRetries = _ => ref.set(true),
             onNewValue = None,
             defaultValue = Some(5),
             retryPolicy = Some(
               RetryPolicies
-                .constantDelay[IO](200.millis)
+                .constantDelay[IO](retryPeriod)
                 .join(RetryPolicies.limitRetries(1))
             )
           )
           .use { _ =>
-            IO.sleep(2.seconds) >> ref.get.assertEquals(true)
+            IO.sleep(retryPeriod * 2) >> ref.get.assertEquals(true)
           }
       }
 
