@@ -16,7 +16,7 @@
 
 package com.permutive.refreshable
 
-import cats.effect.{Fiber, Ref, Resource, Temporal}
+import cats.effect._
 import cats.effect.syntax.all._
 import cats.syntax.all._
 import cats.{~>, Applicative, Functor}
@@ -230,7 +230,7 @@ object Refreshable {
           .join(RetryPolicies.limitRetries(5))
       )
 
-    val makeFiber = getValue
+    def makeFiber(wait: Deferred[F, Unit]) = (wait.get >> getValue
       .flatMap(a =>
         refreshLoop[F, A](
           a.value,
@@ -240,16 +240,17 @@ object Refreshable {
           onRefreshFailure,
           newValueHook,
           rp
-        )
-          .handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
-      )
-      .start
+        ).handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
+      )).start
 
     (for {
       // `.background` means the refresh loop runs in a fiber, but leaving the scope of the `Resource` will cancel
       // it for us. Use the provided callback if a failure occurs in the background fiber, there is no other way to
       // signal a failure from the background.
-      fiber <- Resource.eval(makeFiber)
+      wait <- Resource.eval(
+        Concurrent[F].deferred[Unit].flatTap(_.complete(()))
+      )
+      fiber <- Resource.eval(makeFiber(wait))
       fiberRef <- Resource
         .make(Ref.of[F, Option[Fiber[F, Throwable, Unit]]](Some(fiber)))(
           _.get.flatMap(_.traverse_(_.cancel))
@@ -259,20 +260,44 @@ object Refreshable {
 
       override val get: F[CachedValue[A]] = getValue
 
-      override val cancel: F[Boolean] = fiberRef.get.flatMap(
-        _.fold(false.pure[F])(
-          _.cancel >> updateValue(v => CachedValue.Cancelled(v.value)).as(true)
-        ).uncancelable
-      )
+      override val cancel: F[Boolean] = fiberRef
+        .modify {
+          case None => None -> false.pure[F]
+          case Some(f) =>
+            None -> (f.cancel >> updateValue(v =>
+              CachedValue.Cancelled(v.value)
+            )
+              .as(true))
+        }
+        .flatten
+        .uncancelable
+
+      // override val cancel: F[Boolean] = fiberRef.get.flatMap(
+      //   _.fold(false.pure[F])(
+      //     _.cancel >> updateValue(v => CachedValue.Cancelled(v.value)).as(true)
+      //   ).uncancelable
+      // )
+
+      // override val restart: F[Boolean] =
+      //   fiberRef.get
+      //     .flatMap(
+      //       _.fold(makeFiber.flatMap(f => fiberRef.set(Some(f))).as(true))(_ =>
+      //         false.pure[F]
+      //       )
+      //     )
+      //     .uncancelable
 
       override val restart: F[Boolean] =
-        fiberRef.get
-          .flatMap(
-            _.fold(makeFiber.flatMap(f => fiberRef.set(Some(f))).as(true))(_ =>
-              false.pure[F]
-            )
-          )
-          .uncancelable
+        Concurrent[F].deferred[Unit].flatMap { wait =>
+          makeFiber(wait).flatMap { fib =>
+            fiberRef.modify {
+              case None => Some(fib) -> wait.complete(()).as(true)
+              case curr @ Some(_) =>
+                curr -> (fib.cancel.start >> wait.complete(())).as(false)
+            }.flatten
+          }.uncancelable
+        }
+
     }).uncancelable
   }
 

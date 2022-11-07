@@ -94,7 +94,7 @@ class RefreshableSuite extends CatsEffectSuite {
               .assertEquals(true) >> r.get
               .assertEquals(CachedValue.Cancelled(0)) >>
               IO.sleep(cacheTTL * 2) >>
-              //Check that the background fiber really is dead and not still refreshing
+              // Check that the background fiber really is dead and not still refreshing
               r.get.assertEquals(CachedValue.Cancelled(0))
           }
       }
@@ -102,23 +102,85 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    // test("Cancelation race") {
-    //   Refreshable
-    //     .resource[IO, Int](
-    //       refresh = IO.pure(1),
-    //       cacheDuration = _ => 1.second,
-    //       onRefreshFailure = _ => IO.unit,
-    //       onExhaustedRetries = _ => IO.unit,
-    //       onNewValue = None,
-    //       defaultValue = None,
-    //       retryPolicy = None
-    //     )
-    //     .use { r =>
-    //       r.cancel.both(r.cancel).flatMap { res =>
-    //         IO(assert(Set(true -> false, false, true).contains(clue(res))))
-    //       }
-    //     }
-    // }
+    test("Cancelation race") {
+      val run = Refreshable
+        .resource[IO, Int](
+          refresh = IO.pure(1),
+          cacheDuration = _ => 1.second,
+          onRefreshFailure = _ => IO.unit,
+          onExhaustedRetries = _ => IO.unit,
+          onNewValue = None,
+          defaultValue = None,
+          retryPolicy = None
+        )
+        .use { r =>
+          r.cancel.both(r.cancel).flatMap { res =>
+            IO(assert(Set(true -> false, false -> true).contains(clue(res))))
+          }
+        }
+
+      run.replicateA_(100)
+    }
+
+    test("Restart when not canceled") {
+      Refreshable
+        .resource[IO, Int](
+          refresh = IO.pure(1),
+          cacheDuration = _ => 1.second,
+          onRefreshFailure = _ => IO.unit,
+          onExhaustedRetries = _ => IO.unit,
+          onNewValue = None,
+          defaultValue = None,
+          retryPolicy = None
+        )
+        .use { r =>
+          r.restart.assertEquals(false)
+        }
+    }
+
+    test("Cancel then restart") {
+
+      val cacheTTL = 1.second
+
+      val run = Refreshable
+        .resource[IO, Int](
+          refresh = IO.pure(0),
+          cacheDuration = _ => cacheTTL,
+          onRefreshFailure = _ => IO.unit,
+          onExhaustedRetries = _ => IO.unit,
+          onNewValue = None,
+          defaultValue = None,
+          retryPolicy = None
+        )
+        .use { r =>
+          r.cancel >>
+            r.get.assertEquals(CachedValue.Cancelled(0)) >>
+            r.restart.assertEquals(true) >> IO.sleep(cacheTTL * 2) >>
+            r.get.assertEquals(CachedValue.Success(0))
+        }
+
+      TestControl.executeEmbed(run)
+    }
+
+    test("Restart race") {
+      val run = Refreshable
+        .resource[IO, Int](
+          refresh = IO.pure(1),
+          cacheDuration = _ => 1.second,
+          onRefreshFailure = _ => IO.unit,
+          onExhaustedRetries = _ => IO.unit,
+          onNewValue = None,
+          defaultValue = None,
+          retryPolicy = None
+        )
+        .use { r =>
+          r.cancel >> r.restart.both(r.restart).flatMap { res =>
+            IO(assert(Set(true -> false, false -> true).contains(clue(res))))
+          }
+        }
+
+      run.replicateA_(100)
+    }
 
     test("onRefreshFailure is invoked if refresh fails") {
 
