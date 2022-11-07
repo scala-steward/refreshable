@@ -26,6 +26,23 @@ import scala.concurrent.duration._
 class RefreshableSuite extends CatsEffectSuite {
 
   def suite(implicit loc: munit.Location): Unit = {
+
+    test("Uses initial value if available") {
+      Refreshable
+        .resource[IO, Int](
+          refresh = IO.pure(1),
+          cacheDuration = _ => 1.second,
+          onRefreshFailure = _ => IO.unit,
+          onExhaustedRetries = _ => IO.unit,
+          onNewValue = None,
+          defaultValue = Some(2),
+          retryPolicy = None
+        )
+        .use { r =>
+          r.value.assertEquals(1)
+        }
+    }
+
     test("Uses default value if construction fails") {
       Refreshable
         .resource[IO, Int](
@@ -34,11 +51,11 @@ class RefreshableSuite extends CatsEffectSuite {
           onRefreshFailure = _ => IO.unit,
           onExhaustedRetries = _ => IO.unit,
           onNewValue = None,
-          defaultValue = Some(5),
+          defaultValue = Some(2),
           retryPolicy = None
         )
         .use { r =>
-          r.value.assertEquals(5)
+          r.value.assertEquals(2)
         }
     }
 
@@ -56,6 +73,52 @@ class RefreshableSuite extends CatsEffectSuite {
         .use_
         .intercept[Boom.type]
     }
+
+    test("Cancelation") {
+
+      val cacheTTL = 1.second
+
+      val run = IO.ref(0).flatMap { state =>
+        Refreshable
+          .resource[IO, Int](
+            refresh = state.getAndUpdate(_ + 1),
+            cacheDuration = _ => cacheTTL,
+            onRefreshFailure = _ => IO.unit,
+            onExhaustedRetries = _ => IO.unit,
+            onNewValue = None,
+            defaultValue = None,
+            retryPolicy = None
+          )
+          .use { r =>
+            r.cancel
+              .assertEquals(true) >> r.get
+              .assertEquals(CachedValue.Cancelled(0)) >>
+              IO.sleep(cacheTTL * 2) >>
+              //Check that the background fiber really is dead and not still refreshing
+              r.get.assertEquals(CachedValue.Cancelled(0))
+          }
+      }
+
+      TestControl.executeEmbed(run)
+    }
+
+    // test("Cancelation race") {
+    //   Refreshable
+    //     .resource[IO, Int](
+    //       refresh = IO.pure(1),
+    //       cacheDuration = _ => 1.second,
+    //       onRefreshFailure = _ => IO.unit,
+    //       onExhaustedRetries = _ => IO.unit,
+    //       onNewValue = None,
+    //       defaultValue = None,
+    //       retryPolicy = None
+    //     )
+    //     .use { r =>
+    //       r.cancel.both(r.cancel).flatMap { res =>
+    //         IO(assert(Set(true -> false, false, true).contains(clue(res))))
+    //       }
+    //     }
+    // }
 
     test("onRefreshFailure is invoked if refresh fails") {
 
@@ -106,6 +169,30 @@ class RefreshableSuite extends CatsEffectSuite {
 
       TestControl.executeEmbed(run)
 
+    }
+
+    test("onNewValue is invoked with the expected values") {
+
+      val run = IO.ref(0).flatMap { state =>
+        IO.ref((0, 0.millis)).flatMap { result =>
+          Refreshable
+            .resource[IO, Int](
+              refresh = state.getAndUpdate(_ + 1),
+              cacheDuration = _ => 2.seconds,
+              onRefreshFailure = _ => IO.unit,
+              onExhaustedRetries = _ => IO.unit,
+              onNewValue =
+                Some((next: Int, d: FiniteDuration) => result.set(next -> d)),
+              defaultValue = None,
+              retryPolicy = None
+            )
+            .use { _ =>
+              IO.sleep(3.seconds) >> result.get.assertEquals(1 -> 2.seconds)
+            }
+        }
+      }
+
+      TestControl.executeEmbed(run)
     }
   }
 
