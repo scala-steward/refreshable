@@ -65,6 +65,8 @@ trait Refreshable[F[_], A] { outer =>
 
 object Refreshable {
 
+  /** The default retry policy used when none is specified.
+    */
   def defaultPolicy[F[_]: Applicative]: RetryPolicy[F] =
     RetryPolicies
       .constantDelay[F](200.millis)
@@ -114,29 +116,16 @@ object Refreshable {
       onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
       defaultValue: Option[A] = None,
       retryPolicy: Option[RetryPolicy[F]] = None
-  ): Resource[F, Refreshable[F, A]] = {
-    val faCv: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
-
-    for {
-      a <- Resource.eval(
-        defaultValue.fold(faCv)(default =>
-          faCv.handleError(th => CachedValue.Error(default, th))
-        )
-      )
-      ref <- Resource.eval(Ref.of[F, CachedValue[A]](a))
-      rv <- impl(
-        refresh,
-        cacheDuration,
-        onRefreshFailure,
-        onExhaustedRetries,
-        onNewValue,
-        ref.get,
-        ref.set,
-        ref.update,
-        retryPolicy.map((_: A) => _)
-      )
-    } yield rv
-  }
+  ): Resource[F, Refreshable[F, A]] =
+    derivedRetry(
+      refresh,
+      cacheDuration,
+      retryPolicy.fold((_: A) => defaultPolicy[F])(p => (_: A) => p),
+      onRefreshFailure,
+      onExhaustedRetries,
+      onNewValue,
+      defaultValue
+    )
 
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
