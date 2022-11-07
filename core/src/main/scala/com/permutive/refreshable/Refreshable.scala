@@ -272,21 +272,6 @@ object Refreshable {
         .flatten
         .uncancelable
 
-      // override val cancel: F[Boolean] = fiberRef.get.flatMap(
-      //   _.fold(false.pure[F])(
-      //     _.cancel >> updateValue(v => CachedValue.Cancelled(v.value)).as(true)
-      //   ).uncancelable
-      // )
-
-      // override val restart: F[Boolean] =
-      //   fiberRef.get
-      //     .flatMap(
-      //       _.fold(makeFiber.flatMap(f => fiberRef.set(Some(f))).as(true))(_ =>
-      //         false.pure[F]
-      //       )
-      //     )
-      //     .uncancelable
-
       override val restart: F[Boolean] =
         Concurrent[F].deferred[Unit].flatMap { wait =>
           makeFiber(wait).flatMap { fib =>
