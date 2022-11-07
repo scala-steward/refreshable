@@ -84,6 +84,33 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
+    test("Exhausted retries") {
+
+      val cacheTTL = 1.seconds
+
+      val run = IO.ref(0).flatMap { state =>
+        factory
+          .resource[Int](
+            // Initial evaluation succeeds but all refreshes fail
+            refresh = state.getAndUpdate(_ + 1).flatTap { curr =>
+              IO.raiseError(Boom).whenA(curr > 0)
+            },
+            cacheDuration = _ => cacheTTL,
+            onRefreshFailure = _ => IO.unit,
+            onExhaustedRetries = _ => IO.unit,
+            onNewValue = None,
+            defaultValue = Some(2),
+            retryPolicy = None
+          )
+          .use { r =>
+            IO.sleep(cacheTTL * 5) >> r.get
+              .assertEquals(CachedValue.Error(0, Boom))
+          }
+      }
+
+      TestControl.executeEmbed(run)
+    }
+
     test("Uses default value if construction fails") {
       factory
         .resource[Int](
