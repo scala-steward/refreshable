@@ -16,6 +16,7 @@
 
 package com.permutive.refreshable
 
+import cats.syntax.all._
 import cats.effect._
 import cats.effect.testkit.TestControl
 import retry._
@@ -41,6 +42,32 @@ class RefreshableSuite extends CatsEffectSuite {
         .use { r =>
           r.value.assertEquals(1)
         }
+    }
+
+    test("Retries on failure") {
+
+      val cacheTTL = 2.seconds
+
+      val run = IO.ref(0).flatMap { state =>
+        Refreshable
+          .resource[IO, Int](
+            // Initial evaluation succeeds but first refresh will fail and need to be retried
+            refresh = state.getAndUpdate(_ + 1).flatTap { curr =>
+              IO.raiseError(Boom).whenA(curr == 1)
+            },
+            cacheDuration = _ => cacheTTL,
+            onRefreshFailure = _ => IO.unit,
+            onExhaustedRetries = _ => IO.unit,
+            onNewValue = None,
+            defaultValue = Some(2),
+            retryPolicy = None
+          )
+          .use { r =>
+            IO.sleep(3.seconds) >> r.get.assertEquals(CachedValue.Success(2))
+          }
+      }
+
+      TestControl.executeEmbed(run)
     }
 
     test("Uses default value if construction fails") {
