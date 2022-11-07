@@ -29,7 +29,7 @@ class RefreshableSuite extends CatsEffectSuite {
 
   def suite(factory: RefreshableFactory)(implicit loc: munit.Location): Unit = {
 
-    test("Uses initial value if available") {
+    test(s"${factory.name} - Uses initial value if available") {
       factory
         .resource[Int](
           refresh = IO.pure(1),
@@ -45,7 +45,7 @@ class RefreshableSuite extends CatsEffectSuite {
         }
     }
 
-    test("Retries on failure") {
+    test(s"${factory.name} - Retries on failure") {
 
       val cacheTTL = 2.seconds
 
@@ -71,7 +71,7 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    test("Exhausted retries") {
+    test(s"${factory.name} - Exhausted retries") {
 
       val cacheTTL = 1.seconds
 
@@ -98,7 +98,7 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    test("Uses default value if construction fails") {
+    test(s"${factory.name} - Uses default value if construction fails") {
       factory
         .resource[Int](
           refresh = IO.raiseError(Boom),
@@ -114,7 +114,9 @@ class RefreshableSuite extends CatsEffectSuite {
         }
     }
 
-    test("Throws if construction fails and no default value provided") {
+    test(
+      s"${factory.name} - Throws if construction fails and no default value provided"
+    ) {
       factory
         .resource[Int](
           refresh = IO.raiseError(Boom),
@@ -129,7 +131,7 @@ class RefreshableSuite extends CatsEffectSuite {
         .intercept[Boom.type]
     }
 
-    test("Cancelation") {
+    test(s"${factory.name} - Cancelation") {
 
       val cacheTTL = 1.second
 
@@ -157,7 +159,7 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    test("Cancelation race") {
+    test(s"${factory.name} - Cancelation race") {
       val run = factory
         .resource[Int](
           refresh = IO.pure(1),
@@ -177,7 +179,7 @@ class RefreshableSuite extends CatsEffectSuite {
       run.replicateA_(100)
     }
 
-    test("Restart when not canceled") {
+    test(s"${factory.name} - Restart when not canceled") {
       factory
         .resource[Int](
           refresh = IO.pure(1),
@@ -193,7 +195,7 @@ class RefreshableSuite extends CatsEffectSuite {
         }
     }
 
-    test("Cancel then restart") {
+    test(s"${factory.name} - Cancel then restart") {
 
       val cacheTTL = 1.second
 
@@ -217,7 +219,7 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    test("Restart race") {
+    test(s"${factory.name} - Restart race") {
       val run = factory
         .resource[Int](
           refresh = IO.pure(1),
@@ -237,7 +239,7 @@ class RefreshableSuite extends CatsEffectSuite {
       run.replicateA_(100)
     }
 
-    test("onRefreshFailure is invoked if refresh fails") {
+    test(s"${factory.name} - onRefreshFailure is invoked if refresh fails") {
 
       val cacheTTL = 1.second
 
@@ -260,7 +262,9 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
     }
 
-    test("onExhaustedRetries is invoked if refresh policy is exhausted") {
+    test(
+      s"${factory.name} - onExhaustedRetries is invoked if refresh policy is exhausted"
+    ) {
 
       val retryPeriod = 1.second
 
@@ -288,7 +292,7 @@ class RefreshableSuite extends CatsEffectSuite {
 
     }
 
-    test("onNewValue is invoked with the expected values") {
+    test(s"${factory.name} - onNewValue is invoked with the expected values") {
 
       val run = IO.ref(0).flatMap { state =>
         IO.ref((0, 0.millis)).flatMap { result =>
@@ -317,6 +321,9 @@ class RefreshableSuite extends CatsEffectSuite {
   suite(MapK)
 
   object Default extends RefreshableFactory {
+
+    override val name: String = "default"
+
     override def resource[A](
         refresh: IO[A],
         cacheDuration: A => FiniteDuration,
@@ -337,6 +344,9 @@ class RefreshableSuite extends CatsEffectSuite {
   }
 
   object MapK extends RefreshableFactory {
+
+    override val name: String = "mapK"
+
     override def resource[A](
         refresh: IO[A],
         cacheDuration: A => FiniteDuration,
@@ -359,6 +369,9 @@ class RefreshableSuite extends CatsEffectSuite {
   }
 
   trait RefreshableFactory {
+
+    def name: String
+
     def resource[A](
         refresh: IO[A],
         cacheDuration: A => FiniteDuration,
