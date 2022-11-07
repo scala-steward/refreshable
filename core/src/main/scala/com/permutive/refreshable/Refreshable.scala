@@ -65,6 +65,11 @@ trait Refreshable[F[_], A] { outer =>
 
 object Refreshable {
 
+  def defaultPolicy[F[_]: Applicative]: RetryPolicy[F] =
+    RetryPolicies
+      .constantDelay[F](200.millis)
+      .join(RetryPolicies.limitRetries(5))
+
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
     *
@@ -98,8 +103,8 @@ object Refreshable {
     *   during startup
     * @param retryPolicy
     *   an optional configuration object for attempting to retry the effect of
-    *   `fa` on failure. When no value is supplied this defaults to 5 retries
-    *   with a delay between each of 200 milliseconds.
+    *   `fa` on failure. When no value is supplied this defaults to
+    *   [[defaultPolicy]]
     */
   def resource[F[_]: Temporal, A](
       refresh: F[A],
@@ -224,11 +229,7 @@ object Refreshable {
       onNewValue.getOrElse((_, _) => Applicative[F].unit)
 
     val rp =
-      retryPolicy.getOrElse((_: A) =>
-        RetryPolicies
-          .constantDelay(200.millis)
-          .join(RetryPolicies.limitRetries(5))
-      )
+      retryPolicy.getOrElse((_: A) => defaultPolicy)
 
     def makeFiber(wait: Deferred[F, Unit]) = (wait.get >> getValue
       .flatMap(a =>

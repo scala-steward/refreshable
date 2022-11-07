@@ -318,6 +318,7 @@ class RefreshableSuite extends CatsEffectSuite {
   }
 
   suite(Default)
+  suite(Derived)
   suite(MapK)
 
   object Default extends RefreshableFactory {
@@ -341,6 +342,33 @@ class RefreshableSuite extends CatsEffectSuite {
       defaultValue,
       retryPolicy
     )
+  }
+
+  object Derived extends RefreshableFactory {
+
+    override val name: String = "derived"
+
+    override def resource[A](
+        refresh: IO[A],
+        cacheDuration: A => FiniteDuration,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
+        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
+        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        defaultValue: Option[A] = None,
+        retryPolicy: Option[RetryPolicy[IO]] = None
+    ): Resource[IO, Refreshable[IO, A]] = Refreshable
+      .derivedRetry(
+        refresh,
+        cacheDuration,
+        retryPolicy.fold((_: A) => Refreshable.defaultPolicy[IO])(p =>
+          (_: A) => p
+        ),
+        onRefreshFailure,
+        onExhaustedRetries,
+        onNewValue,
+        defaultValue
+      )
+      .map(_.mapK(FunctionK.id[IO]))
   }
 
   object MapK extends RefreshableFactory {
