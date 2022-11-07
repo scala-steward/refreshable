@@ -16,6 +16,7 @@
 
 package com.permutive.refreshable
 
+import cats.arrow.FunctionK
 import cats.syntax.all._
 import cats.effect._
 import cats.effect.testkit.TestControl
@@ -26,11 +27,24 @@ import scala.concurrent.duration._
 
 class RefreshableSuite extends CatsEffectSuite {
 
-  def suite(implicit loc: munit.Location): Unit = {
+  trait RefreshableFactory {
+    def resource[A](
+        refresh: IO[A],
+        cacheDuration: A => FiniteDuration,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
+        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
+        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        defaultValue: Option[A] = None,
+        retryPolicy: Option[RetryPolicy[IO]] = None
+    ): Resource[IO, Refreshable[IO, A]]
+
+  }
+
+  def suite(factory: RefreshableFactory)(implicit loc: munit.Location): Unit = {
 
     test("Uses initial value if available") {
-      Refreshable
-        .resource[IO, Int](
+      factory
+        .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -49,8 +63,8 @@ class RefreshableSuite extends CatsEffectSuite {
       val cacheTTL = 2.seconds
 
       val run = IO.ref(0).flatMap { state =>
-        Refreshable
-          .resource[IO, Int](
+        factory
+          .resource[Int](
             // Initial evaluation succeeds but first refresh will fail and need to be retried
             refresh = state.getAndUpdate(_ + 1).flatTap { curr =>
               IO.raiseError(Boom).whenA(curr == 1)
@@ -71,8 +85,8 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("Uses default value if construction fails") {
-      Refreshable
-        .resource[IO, Int](
+      factory
+        .resource[Int](
           refresh = IO.raiseError(Boom),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -87,8 +101,8 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("Throws if construction fails and no default value provided") {
-      Refreshable
-        .resource[IO, Int](
+      factory
+        .resource[Int](
           refresh = IO.raiseError(Boom),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -106,8 +120,8 @@ class RefreshableSuite extends CatsEffectSuite {
       val cacheTTL = 1.second
 
       val run = IO.ref(0).flatMap { state =>
-        Refreshable
-          .resource[IO, Int](
+        factory
+          .resource[Int](
             refresh = state.getAndUpdate(_ + 1),
             cacheDuration = _ => cacheTTL,
             onRefreshFailure = _ => IO.unit,
@@ -130,8 +144,8 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("Cancelation race") {
-      val run = Refreshable
-        .resource[IO, Int](
+      val run = factory
+        .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -150,8 +164,8 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("Restart when not canceled") {
-      Refreshable
-        .resource[IO, Int](
+      factory
+        .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -169,8 +183,8 @@ class RefreshableSuite extends CatsEffectSuite {
 
       val cacheTTL = 1.second
 
-      val run = Refreshable
-        .resource[IO, Int](
+      val run = factory
+        .resource[Int](
           refresh = IO.pure(0),
           cacheDuration = _ => cacheTTL,
           onRefreshFailure = _ => IO.unit,
@@ -190,8 +204,8 @@ class RefreshableSuite extends CatsEffectSuite {
     }
 
     test("Restart race") {
-      val run = Refreshable
-        .resource[IO, Int](
+      val run = factory
+        .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
           onRefreshFailure = _ => IO.unit,
@@ -214,8 +228,8 @@ class RefreshableSuite extends CatsEffectSuite {
       val cacheTTL = 1.second
 
       val run = IO.ref(false).flatMap { ref =>
-        Refreshable
-          .resource[IO, Int](
+        factory
+          .resource[Int](
             refresh = IO.raiseError(Boom),
             cacheDuration = _ => cacheTTL,
             onRefreshFailure = _ => ref.set(true),
@@ -237,8 +251,8 @@ class RefreshableSuite extends CatsEffectSuite {
       val retryPeriod = 1.second
 
       val run = IO.ref(false).flatMap { ref =>
-        Refreshable
-          .resource[IO, Int](
+        factory
+          .resource[Int](
             refresh = IO.raiseError(Boom),
             cacheDuration = _ => 5.millis,
             onRefreshFailure = _ => IO.unit,
@@ -264,8 +278,8 @@ class RefreshableSuite extends CatsEffectSuite {
 
       val run = IO.ref(0).flatMap { state =>
         IO.ref((0, 0.millis)).flatMap { result =>
-          Refreshable
-            .resource[IO, Int](
+          factory
+            .resource[Int](
               refresh = state.getAndUpdate(_ + 1),
               cacheDuration = _ => 2.seconds,
               onRefreshFailure = _ => IO.unit,
@@ -285,7 +299,50 @@ class RefreshableSuite extends CatsEffectSuite {
     }
   }
 
-  suite
+  suite(Default)
+  suite(MapK)
+
+  object Default extends RefreshableFactory {
+    override def resource[A](
+        refresh: IO[A],
+        cacheDuration: A => FiniteDuration,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
+        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
+        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        defaultValue: Option[A] = None,
+        retryPolicy: Option[RetryPolicy[IO]] = None
+    ): Resource[IO, Refreshable[IO, A]] = Refreshable.resource(
+      refresh,
+      cacheDuration,
+      onRefreshFailure,
+      onExhaustedRetries,
+      onNewValue,
+      defaultValue,
+      retryPolicy
+    )
+  }
+
+  object MapK extends RefreshableFactory {
+    override def resource[A](
+        refresh: IO[A],
+        cacheDuration: A => FiniteDuration,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
+        onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
+        onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        defaultValue: Option[A] = None,
+        retryPolicy: Option[RetryPolicy[IO]] = None
+    ): Resource[IO, Refreshable[IO, A]] = Refreshable
+      .resource(
+        refresh,
+        cacheDuration,
+        onRefreshFailure,
+        onExhaustedRetries,
+        onNewValue,
+        defaultValue,
+        retryPolicy
+      )
+      .map(_.mapK(FunctionK.id[IO]))
+  }
 
   object Boom extends RuntimeException("BOOM")
 
