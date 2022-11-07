@@ -34,8 +34,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = Some(2),
           retryPolicy = None
@@ -57,8 +57,8 @@ class RefreshableSuite extends CatsEffectSuite {
               IO.raiseError(Boom).whenA(curr == 1)
             },
             cacheDuration = _ => cacheTTL,
-            onRefreshFailure = _ => IO.unit,
-            onExhaustedRetries = _ => IO.unit,
+            onRefreshFailure = { case _ => IO.unit },
+            onExhaustedRetries = { case _ => IO.unit },
             onNewValue = None,
             defaultValue = Some(2),
             retryPolicy = None
@@ -83,8 +83,8 @@ class RefreshableSuite extends CatsEffectSuite {
               IO.raiseError(Boom).whenA(curr > 0)
             },
             cacheDuration = _ => cacheTTL,
-            onRefreshFailure = _ => IO.unit,
-            onExhaustedRetries = _ => IO.unit,
+            onRefreshFailure = { case _ => IO.unit },
+            onExhaustedRetries = { case _ => IO.unit },
             onNewValue = None,
             defaultValue = Some(2),
             retryPolicy = None
@@ -103,8 +103,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.raiseError(Boom),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = Some(2),
           retryPolicy = None
@@ -121,8 +121,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.raiseError(Boom),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = None,
           retryPolicy = None
@@ -140,8 +140,8 @@ class RefreshableSuite extends CatsEffectSuite {
           .resource[Int](
             refresh = state.getAndUpdate(_ + 1),
             cacheDuration = _ => cacheTTL,
-            onRefreshFailure = _ => IO.unit,
-            onExhaustedRetries = _ => IO.unit,
+            onRefreshFailure = { case _ => IO.unit },
+            onExhaustedRetries = { case _ => IO.unit },
             onNewValue = None,
             defaultValue = None,
             retryPolicy = None
@@ -164,8 +164,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = None,
           retryPolicy = None
@@ -184,8 +184,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = None,
           retryPolicy = None
@@ -203,8 +203,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.pure(0),
           cacheDuration = _ => cacheTTL,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = None,
           retryPolicy = None
@@ -224,8 +224,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .resource[Int](
           refresh = IO.pure(1),
           cacheDuration = _ => 1.second,
-          onRefreshFailure = _ => IO.unit,
-          onExhaustedRetries = _ => IO.unit,
+          onRefreshFailure = { case _ => IO.unit },
+          onExhaustedRetries = { case _ => IO.unit },
           onNewValue = None,
           defaultValue = None,
           retryPolicy = None
@@ -248,8 +248,8 @@ class RefreshableSuite extends CatsEffectSuite {
           .resource[Int](
             refresh = IO.raiseError(Boom),
             cacheDuration = _ => cacheTTL,
-            onRefreshFailure = _ => ref.set(true),
-            onExhaustedRetries = _ => IO.unit,
+            onRefreshFailure = { case _ => ref.set(true) },
+            onExhaustedRetries = { case _ => IO.unit },
             onNewValue = None,
             defaultValue = Some(5),
             retryPolicy = None
@@ -273,8 +273,8 @@ class RefreshableSuite extends CatsEffectSuite {
           .resource[Int](
             refresh = IO.raiseError(Boom),
             cacheDuration = _ => 5.millis,
-            onRefreshFailure = _ => IO.unit,
-            onExhaustedRetries = _ => ref.set(true),
+            onRefreshFailure = { case _ => IO.unit },
+            onExhaustedRetries = { case _ => ref.set(true) },
             onNewValue = None,
             defaultValue = Some(5),
             retryPolicy = Some(
@@ -300,8 +300,8 @@ class RefreshableSuite extends CatsEffectSuite {
             .resource[Int](
               refresh = state.getAndUpdate(_ + 1),
               cacheDuration = _ => 2.seconds,
-              onRefreshFailure = _ => IO.unit,
-              onExhaustedRetries = _ => IO.unit,
+              onRefreshFailure = { case _ => IO.unit },
+              onExhaustedRetries = { case _ => IO.unit },
               onNewValue =
                 Some((next: Int, d: FiniteDuration) => result.set(next -> d)),
               defaultValue = None,
