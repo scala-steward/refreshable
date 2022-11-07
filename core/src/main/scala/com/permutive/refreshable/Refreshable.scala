@@ -82,8 +82,8 @@ object Refreshable {
     *   how long to cache a newly generated value of `A` for, if an effect is
     *   needed to generate this duration it should have occurred in `fa`
     * @param onRefreshFailure
-    *   what to when an attempt to refresh the value fails, `fa` will be retried
-    *   according to `retryPolicy`
+    *   what to do when an attempt to refresh the value fails, `fa` will be
+    *   retried according to `retryPolicy`
     * @param onExhaustedRetries
     *   what to do if retrying to refresh the value fails. The refresh fiber
     *   will have failed at this point and the value will grow stale. It is up
@@ -102,7 +102,7 @@ object Refreshable {
     *   with a delay between each of 200 milliseconds.
     */
   def resource[F[_]: Temporal, A](
-      fa: F[A],
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
@@ -110,7 +110,7 @@ object Refreshable {
       defaultValue: Option[A] = None,
       retryPolicy: Option[RetryPolicy[F]] = None
   ): Resource[F, Refreshable[F, A]] = {
-    val faCv: F[CachedValue[A]] = fa.map(CachedValue.Success(_))
+    val faCv: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
 
     for {
       a <- Resource.eval(
@@ -120,7 +120,7 @@ object Refreshable {
       )
       ref <- Resource.eval(Ref.of[F, CachedValue[A]](a))
       rv <- impl(
-        fa,
+        refresh,
         cacheDuration,
         onRefreshFailure,
         onExhaustedRetries,
@@ -178,7 +178,7 @@ object Refreshable {
     *   during startup
     */
   def derivedRetry[F[_]: Temporal, A](
-      fa: F[A],
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
@@ -186,7 +186,7 @@ object Refreshable {
       onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
       defaultValue: Option[A] = None
   ): Resource[F, Refreshable[F, A]] = {
-    val faCv: F[CachedValue[A]] = fa.map(CachedValue.Success(_))
+    val faCv: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
 
     for {
       a <- Resource.eval(
@@ -196,7 +196,7 @@ object Refreshable {
       )
       ref <- Resource.eval(Ref.of[F, CachedValue[A]](a))
       rv <- impl(
-        fa,
+        refresh,
         cacheDuration,
         onRefreshFailure,
         onExhaustedRetries,
@@ -210,7 +210,7 @@ object Refreshable {
   }
 
   private[refreshable] def impl[F[_]: Temporal, A](
-      fa: F[A],
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
@@ -234,7 +234,7 @@ object Refreshable {
       .flatMap(a =>
         refreshLoop[F, A](
           a.value,
-          fa,
+          refresh,
           setValue,
           cacheDuration,
           onRefreshFailure,
