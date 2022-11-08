@@ -175,7 +175,8 @@ class RefreshableSuite extends CatsEffectSuite {
         .use { r =>
           r.cancel.both(r.cancel).flatMap { res =>
             IO(assert(Set(true -> false, false -> true).contains(clue(res))))
-          }
+          } >> r.get
+            .assertEquals(CachedValue.Cancelled(1))
         }
 
       run.replicateA_(100)
@@ -224,7 +225,7 @@ class RefreshableSuite extends CatsEffectSuite {
     test(s"${factory.name} - Restart race") {
       val run = factory
         .resource[Int](
-          refresh = IO.pure(1),
+          refresh = IO.pure(0),
           cacheDuration = _ => 1.second,
           onRefreshFailure = { case _ => IO.unit },
           onExhaustedRetries = { case _ => IO.unit },
@@ -235,10 +236,11 @@ class RefreshableSuite extends CatsEffectSuite {
         .use { r =>
           r.cancel >> r.restart.both(r.restart).flatMap { res =>
             IO(assert(Set(true -> false, false -> true).contains(clue(res))))
-          }
+          } >> IO.sleep(5.seconds) >>
+            r.get.assertEquals(CachedValue.Success(0))
         }
 
-      run.replicateA_(100)
+      TestControl.executeEmbed(run).replicateA_(100)
     }
 
     test(s"${factory.name} - onRefreshFailure is invoked if refresh fails") {
