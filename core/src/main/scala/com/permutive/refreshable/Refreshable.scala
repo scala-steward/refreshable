@@ -16,7 +16,7 @@
 
 package com.permutive.refreshable
 
-import cats.effect.{Fiber, Ref, Resource, Temporal}
+import cats.effect._
 import cats.effect.syntax.all._
 import cats.syntax.all._
 import cats.{~>, Applicative, Functor}
@@ -65,6 +65,13 @@ trait Refreshable[F[_], A] { outer =>
 
 object Refreshable {
 
+  /** The default retry policy used when none is specified.
+    */
+  def defaultPolicy[F[_]: Applicative]: RetryPolicy[F] =
+    RetryPolicies
+      .constantDelay[F](200.millis)
+      .join(RetryPolicies.limitRetries(5))
+
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
     *
@@ -82,8 +89,8 @@ object Refreshable {
     *   how long to cache a newly generated value of `A` for, if an effect is
     *   needed to generate this duration it should have occurred in `fa`
     * @param onRefreshFailure
-    *   what to when an attempt to refresh the value fails, `fa` will be retried
-    *   according to `retryPolicy`
+    *   what to do when an attempt to refresh the value fails, `fa` will be
+    *   retried according to `retryPolicy`
     * @param onExhaustedRetries
     *   what to do if retrying to refresh the value fails. The refresh fiber
     *   will have failed at this point and the value will grow stale. It is up
@@ -98,40 +105,27 @@ object Refreshable {
     *   during startup
     * @param retryPolicy
     *   an optional configuration object for attempting to retry the effect of
-    *   `fa` on failure. When no value is supplied this defaults to 5 retries
-    *   with a delay between each of 200 milliseconds.
+    *   `fa` on failure. When no value is supplied this defaults to
+    *   [[defaultPolicy]]
     */
   def resource[F[_]: Temporal, A](
-      fa: F[A],
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
       onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
       defaultValue: Option[A] = None,
       retryPolicy: Option[RetryPolicy[F]] = None
-  ): Resource[F, Refreshable[F, A]] = {
-    val faCv: F[CachedValue[A]] = fa.map(CachedValue.Success(_))
-
-    for {
-      a <- Resource.eval(
-        defaultValue.fold(faCv)(default =>
-          faCv.handleError(th => CachedValue.Error(default, th))
-        )
-      )
-      ref <- Resource.eval(Ref.of[F, CachedValue[A]](a))
-      rv <- impl(
-        fa,
-        cacheDuration,
-        onRefreshFailure,
-        onExhaustedRetries,
-        onNewValue,
-        ref.get,
-        ref.set,
-        ref.update,
-        retryPolicy.map((_: A) => _)
-      )
-    } yield rv
-  }
+  ): Resource[F, Refreshable[F, A]] =
+    derivedRetry(
+      refresh,
+      cacheDuration,
+      retryPolicy.fold((_: A) => defaultPolicy[F])(p => (_: A) => p),
+      onRefreshFailure,
+      onExhaustedRetries,
+      onNewValue,
+      defaultValue
+    )
 
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
@@ -178,7 +172,7 @@ object Refreshable {
     *   during startup
     */
   def derivedRetry[F[_]: Temporal, A](
-      fa: F[A],
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
@@ -186,7 +180,7 @@ object Refreshable {
       onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
       defaultValue: Option[A] = None
   ): Resource[F, Refreshable[F, A]] = {
-    val faCv: F[CachedValue[A]] = fa.map(CachedValue.Success(_))
+    val faCv: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
 
     for {
       a <- Resource.eval(
@@ -196,7 +190,7 @@ object Refreshable {
       )
       ref <- Resource.eval(Ref.of[F, CachedValue[A]](a))
       rv <- impl(
-        fa,
+        refresh,
         cacheDuration,
         onRefreshFailure,
         onExhaustedRetries,
@@ -204,52 +198,46 @@ object Refreshable {
         ref.get,
         ref.set,
         ref.update,
-        Some(retryPolicy)
+        retryPolicy
       )
     } yield rv
   }
 
-  private[refreshable] def impl[F[_]: Temporal, A](
-      fa: F[A],
+  private def impl[F[_]: Temporal, A](
+      refresh: F[A],
       cacheDuration: A => FiniteDuration,
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
+      onNewValue: Option[(A, FiniteDuration) => F[Unit]],
       getValue: F[CachedValue[A]],
       setValue: CachedValue[A] => F[Unit],
       updateValue: (CachedValue[A] => CachedValue[A]) => F[Unit],
-      retryPolicy: Option[A => RetryPolicy[F]]
+      retryPolicy: A => RetryPolicy[F]
   ): Resource[F, Refreshable[F, A]] = {
     val newValueHook: (A, FiniteDuration) => F[Unit] =
       onNewValue.getOrElse((_, _) => Applicative[F].unit)
 
-    val rp =
-      retryPolicy.getOrElse((_: A) =>
-        RetryPolicies
-          .constantDelay(200.millis)
-          .join(RetryPolicies.limitRetries(5))
-      )
-
-    val makeFiber = getValue
+    def makeFiber(wait: Deferred[F, Unit]) = (wait.get >> getValue
       .flatMap(a =>
         refreshLoop[F, A](
           a.value,
-          fa,
+          refresh,
           setValue,
           cacheDuration,
           onRefreshFailure,
           newValueHook,
-          rp
-        )
-          .handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
-      )
-      .start
+          retryPolicy
+        ).handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
+      )).start
 
     (for {
       // `.background` means the refresh loop runs in a fiber, but leaving the scope of the `Resource` will cancel
       // it for us. Use the provided callback if a failure occurs in the background fiber, there is no other way to
       // signal a failure from the background.
-      fiber <- Resource.eval(makeFiber)
+      wait <- Resource.eval(
+        Concurrent[F].deferred[Unit].flatTap(_.complete(()))
+      )
+      fiber <- Resource.eval(makeFiber(wait))
       fiberRef <- Resource
         .make(Ref.of[F, Option[Fiber[F, Throwable, Unit]]](Some(fiber)))(
           _.get.flatMap(_.traverse_(_.cancel))
@@ -259,20 +247,29 @@ object Refreshable {
 
       override val get: F[CachedValue[A]] = getValue
 
-      override val cancel: F[Boolean] = fiberRef.get.flatMap(
-        _.fold(false.pure[F])(
-          _.cancel >> updateValue(v => CachedValue.Cancelled(v.value)).as(true)
-        ).uncancelable
-      )
+      override val cancel: F[Boolean] = fiberRef
+        .modify {
+          case None => None -> false.pure[F]
+          case Some(f) =>
+            None -> (f.cancel >> updateValue(v =>
+              CachedValue.Cancelled(v.value)
+            )
+              .as(true))
+        }
+        .flatten
+        .uncancelable
 
       override val restart: F[Boolean] =
-        fiberRef.get
-          .flatMap(
-            _.fold(makeFiber.flatMap(f => fiberRef.set(Some(f))).as(true))(_ =>
-              false.pure[F]
-            )
-          )
-          .uncancelable
+        Concurrent[F].deferred[Unit].flatMap { wait =>
+          makeFiber(wait).flatMap { fib =>
+            fiberRef.modify {
+              case None => Some(fib) -> wait.complete(()).as(true)
+              case curr @ Some(_) =>
+                curr -> (fib.cancel >> wait.complete(())).as(false)
+            }.flatten
+          }.uncancelable
+        }
+
     }).uncancelable
   }
 
