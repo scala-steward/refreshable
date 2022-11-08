@@ -60,10 +60,11 @@ class RefreshableSuite extends CatsEffectSuite {
             onRefreshFailure = { case _ => IO.unit },
             onExhaustedRetries = { case _ => IO.unit },
             onNewValue = None,
-            defaultValue = Some(2),
+            defaultValue = Some(0),
             retryPolicy = None
           )
           .use { r =>
+            // Wait long enough for multiple retries
             IO.sleep(3.seconds) >> r.get.assertEquals(CachedValue.Success(2))
           }
       }
@@ -90,6 +91,7 @@ class RefreshableSuite extends CatsEffectSuite {
             retryPolicy = None
           )
           .use { r =>
+            // Wait long enough for retries to be exhausted
             IO.sleep(cacheTTL * 5) >> r.get
               .assertEquals(CachedValue.Error(0, Boom))
           }
