@@ -315,6 +315,46 @@ class RefreshableSuite extends CatsEffectSuite {
 
       TestControl.executeEmbed(run)
     }
+
+    test(
+      s"${factory.name} - no longer retries once retry policy is exhausted"
+    ) {
+      val run = IO.monotonic.flatMap { start =>
+        factory
+          .resource[Int](
+            // Refresh fails for the first 2 seconds then succeeds
+            refresh = IO.monotonic
+              .map(_ - start)
+              .flatMap(t => IO.raiseError(Boom).whenA(t < 2.seconds))
+              .as(1),
+            cacheDuration = _ => 1.millis,
+            onRefreshFailure = { case _ => IO.unit },
+            onExhaustedRetries = { case _ => IO.unit },
+            onNewValue = None,
+            defaultValue = Some(5),
+            retryPolicy = Some(
+              // Retries will stop after 1 second
+              RetryPolicies
+                .constantDelay[IO](200.millis)
+                .join(RetryPolicies.limitRetries(5))
+            )
+          )
+          .use { r =>
+            // Refresh initially fails
+            r.get.assertEquals(CachedValue.Error(5, Boom)) >>
+              // Wait >>> retry period
+              IO.sleep(10.seconds) >>
+              // Retry would succeed now but fiber should have exited after it exhausted the retry policy
+              // so we should still see `CachedValue.Error(5, Boom)`
+              r.get.assertEquals(
+                CachedValue.Error(5, Boom)
+              )
+          }
+      }
+
+      TestControl.executeEmbed(run)
+
+    }
   }
 
   suite(Default)
