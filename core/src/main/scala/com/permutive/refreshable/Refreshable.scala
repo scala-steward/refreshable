@@ -198,7 +198,7 @@ object Refreshable {
         ref.get,
         ref.set,
         ref.update,
-        Some(retryPolicy)
+        retryPolicy
       )
     } yield rv
   }
@@ -212,13 +212,10 @@ object Refreshable {
       getValue: F[CachedValue[A]],
       setValue: CachedValue[A] => F[Unit],
       updateValue: (CachedValue[A] => CachedValue[A]) => F[Unit],
-      retryPolicy: Option[A => RetryPolicy[F]]
+      retryPolicy: A => RetryPolicy[F]
   ): Resource[F, Refreshable[F, A]] = {
     val newValueHook: (A, FiniteDuration) => F[Unit] =
       onNewValue.getOrElse((_, _) => Applicative[F].unit)
-
-    val rp =
-      retryPolicy.getOrElse((_: A) => defaultPolicy)
 
     def makeFiber(wait: Deferred[F, Unit]) = (wait.get >> getValue
       .flatMap(a =>
@@ -229,7 +226,7 @@ object Refreshable {
           cacheDuration,
           onRefreshFailure,
           newValueHook,
-          rp
+          retryPolicy
         ).handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
       )).start
 
