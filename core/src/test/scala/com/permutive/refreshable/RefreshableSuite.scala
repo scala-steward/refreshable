@@ -41,7 +41,7 @@ class RefreshableSuite extends CatsEffectSuite {
           retryPolicy = None
         )
         .use { r =>
-          r.value.assertEquals(1)
+          r.get.assertEquals(CachedValue.Success(1))
         }
     }
 
