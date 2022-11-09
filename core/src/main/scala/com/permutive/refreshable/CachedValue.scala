@@ -16,7 +16,7 @@
 
 package com.permutive.refreshable
 
-private[refreshable] sealed trait CachedValue[A] {
+sealed trait CachedValue[A] {
   def value: A
   def map[B](f: A => B): CachedValue[B] = this match {
     case CachedValue.Success(value)      => CachedValue.Success(f(value))
@@ -25,7 +25,7 @@ private[refreshable] sealed trait CachedValue[A] {
   }
 }
 
-private[refreshable] object CachedValue {
+object CachedValue {
   case class Success[A](value: A) extends CachedValue[A]
   case class Error[A](value: A, error: Throwable) extends CachedValue[A]
   case class Cancelled[A](value: A) extends CachedValue[A]
