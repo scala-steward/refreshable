@@ -72,113 +72,19 @@ object Refreshable {
       .constantDelay[F](200.millis)
       .join(RetryPolicies.limitRetries(5))
 
-  /** Caches a single instance of type `A` for a period of time before
-    * refreshing it automatically.
-    *
-    * The time between refreshes is dynamic and based on the value of each `A`
-    * itself. This is similar to `RefreshableEffect` except that only exposes a
-    * fixed refresh frequency.
-    *
-    * An old value is only made unavailable _after_ a new value has been
-    * acquired. This means that the time each value is exposed for is
-    * `cacheDuration` plus the time to evaluate `fa`.
-    *
-    * @param fa
-    *   generate a new value of `A`
-    * @param cacheDuration
-    *   how long to cache a newly generated value of `A` for, if an effect is
-    *   needed to generate this duration it should have occurred in `fa`
-    * @param onRefreshFailure
-    *   what to do when an attempt to refresh the value fails, `fa` will be
-    *   retried according to `retryPolicy`
-    * @param onExhaustedRetries
-    *   what to do if retrying to refresh the value fails. The refresh fiber
-    *   will have failed at this point and the value will grow stale. It is up
-    *   to user handle this failure, as they see fit, in their application
-    * @param onNewValue
-    *   a callback invoked whenever a new value is generated, the
-    *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
-    *   waited before the next new value
-    * @param defaultValue
-    *   an optional default value to use when initialising the resource, if the
-    *   call to `fa` fails. This will prevent the constructor from failing
-    *   during startup
-    * @param retryPolicy
-    *   an optional configuration object for attempting to retry the effect of
-    *   `fa` on failure. When no value is supplied this defaults to
-    *   [[defaultPolicy]]
+  /** Builder to construct a [[Refreshable]]
     */
-  def resource[F[_]: Temporal, A](
-      refresh: F[A],
-      cacheDuration: A => FiniteDuration,
-      onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
-      onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
-      defaultValue: Option[A] = None,
-      retryPolicy: Option[RetryPolicy[F]] = None
-  ): Resource[F, Refreshable[F, A]] =
-    derivedRetry(
-      refresh,
-      cacheDuration,
-      retryPolicy.fold((_: A) => defaultPolicy[F])(p => (_: A) => p),
-      onRefreshFailure,
-      onExhaustedRetries,
-      onNewValue,
-      defaultValue
-    )
+  def builder[F[_]: Temporal, A](refresh: F[A]): RefreshableBuilder[F, A] =
+    RefreshableBuilder.builder(refresh)
 
-  /** Caches a single instance of type `A` for a period of time before
-    * refreshing it automatically.
-    *
-    * The time between refreshes is dynamic and based on the value of each `A`
-    * itself. This is similar to `RefreshableEffect` except that only exposes a
-    * fixed refresh frequency.
-    *
-    * As well as the time between refreshes, the retry policy is also dynamic
-    * and based on the value for `A`. This allows you to configure the policy
-    * based on when `A` is going to expire.
-    *
-    * You can use the `cacheDuration` and `retryPolicy` together to eagerly
-    * fetch a new value for `A` using the calculated cache duration minus some
-    * duration to allow for retries and then set the retry policy to retry
-    * throughout that duration.
-    *
-    * An old value is only made unavailable _after_ a new value has been
-    * acquired. This means that the time each value is exposed for is
-    * `cacheDuration` plus the time to evaluate `fa`.
-    *
-    * @param fa
-    *   generate a new value of `A`
-    * @param cacheDuration
-    *   how long to cache a newly generated value of `A` for, if an effect is
-    *   needed to generate this duration it should have occurred in `fa`
-    * @param retryPolicy
-    *   a function to derive a configuration object for attempting to retry the
-    *   effect of `fa` on failure from the current value of `A`.
-    * @param onRefreshFailure
-    *   what to when an attempt to refresh the value fails, `fa` will be retried
-    *   according to `retryPolicy`
-    * @param onExhaustedRetries
-    *   what to do if retrying to refresh the value fails. The refresh fiber
-    *   will have failed at this point and the value will grow stale. It is up
-    *   to user handle this failure, as they see fit, in their application
-    * @param onNewValue
-    *   a callback invoked whenever a new value is generated, the
-    *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
-    *   waited before the next new value
-    * @param defaultValue
-    *   an optional default value to use when initialising the resource, if the
-    *   call to `fa` fails. This will prevent the constructor from failing
-    *   during startup
-    */
-  def derivedRetry[F[_]: Temporal, A](
+  private def derivedRetry[F[_]: Temporal, A](
       refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
       onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
       onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      onNewValue: Option[(A, FiniteDuration) => F[Unit]] = None,
-      defaultValue: Option[A] = None
+      onNewValue: Option[(A, FiniteDuration) => F[Unit]],
+      defaultValue: Option[A]
   ): Resource[F, Refreshable[F, A]] = {
     val faCv: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
 
@@ -320,5 +226,134 @@ object Refreshable {
     override def get: G[CachedValue[A]] = fk(self.get)
     override def cancel: G[Boolean] = fk(self.cancel)
     override def restart: G[Boolean] = fk(self.restart)
+  }
+
+  private object RefreshableBuilder {
+    def builder[F[_]: Temporal, A](fa: F[A]): RefreshableBuilder[F, A] =
+      new RefreshableBuilder[F, A](
+        refresh = fa,
+        cacheDuration = _ => 1.second,
+        retryPolicy = _ => defaultPolicy[F],
+        onRefreshFailure = _ => Applicative[F].unit,
+        onExhaustedRetries = _ => Applicative[F].unit,
+        onNewValue = None,
+        defaultValue = None
+      )
+
+  }
+
+  /** Caches a single instance of type `A` for a period of time before
+    * refreshing it automatically.
+    *
+    * The time between refreshes is dynamic and based on the value of each `A`
+    * itself. This is similar to `RefreshableEffect` except that only exposes a
+    * fixed refresh frequency.
+    *
+    * As well as the time between refreshes, the retry policy is also dynamic
+    * and based on the value for `A`. This allows you to configure the policy
+    * based on when `A` is going to expire.
+    *
+    * You can use the `cacheDuration` and `retryPolicy` together to eagerly
+    * fetch a new value for `A` using the calculated cache duration minus some
+    * duration to allow for retries and then set the retry policy to retry
+    * throughout that duration.
+    *
+    * An old value is only made unavailable _after_ a new value has been
+    * acquired. This means that the time each value is exposed for is
+    * `cacheDuration` plus the time to evaluate `fa`.
+    *
+    * @param refresh
+    *   generate a new value of `A`
+    * @param cacheDuration
+    *   how long to cache a newly generated value of `A` for, if an effect is
+    *   needed to generate this duration it should have occurred in `fa`.
+    * @param retryPolicy a function to derive a configuration object for
+    *   attempting to retry the effect of `fa` on failure from the current value
+    *   of `A`.
+    * @param onRefreshFailure
+    *   what to when an attempt to refresh the value fails, `fa` will be retried
+    *   according to `retryPolicy`
+    * @param onExhaustedRetries
+    *   what to do if retrying to refresh the value fails. The refresh fiber
+    *   will have failed at this point and the value will grow stale. It is up
+    *   to user handle this failure, as they see fit, in their application
+    * @param onNewValue
+    *   a callback invoked whenever a new value is generated, the
+    *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
+    *   waited before the next new value
+    * @param defaultValue
+    *   an optional default value to use when initialising the resource, if the
+    *   call to `fa` fails. This will prevent the constructor from failing
+    *   during startup
+    */
+  class RefreshableBuilder[F[_]: Temporal, A] private (
+      val refresh: F[A],
+      val cacheDuration: A => FiniteDuration,
+      val retryPolicy: A => RetryPolicy[F],
+      val onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
+      val onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
+      val onNewValue: Option[(A, FiniteDuration) => F[Unit]],
+      val defaultValue: Option[A]
+  ) { self =>
+
+    private def copy(
+        refresh: F[A] = self.refresh,
+        cacheDuration: A => FiniteDuration = self.cacheDuration,
+        retryPolicy: A => RetryPolicy[F] = self.retryPolicy,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]] =
+          self.onRefreshFailure,
+        onExhaustedRetries: PartialFunction[Throwable, F[Unit]] =
+          self.onExhaustedRetries,
+        onNewValue: Option[(A, FiniteDuration) => F[Unit]] = self.onNewValue,
+        defaultValue: Option[A] = self.defaultValue
+    ): RefreshableBuilder[F, A] = new RefreshableBuilder[F, A](
+      refresh,
+      cacheDuration,
+      retryPolicy,
+      onRefreshFailure,
+      onExhaustedRetries,
+      onNewValue,
+      defaultValue
+    )
+
+    def cacheDuration(
+        cacheDuration: A => FiniteDuration
+    ): RefreshableBuilder[F, A] = copy(cacheDuration = cacheDuration)
+
+    def retryPolicy(
+        retryPolicy: A => RetryPolicy[F]
+    ): RefreshableBuilder[F, A] = copy(retryPolicy = retryPolicy)
+
+    def retryPolicy(
+        retryPolicy: RetryPolicy[F]
+    ): RefreshableBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
+
+    def onRefreshFailure(
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]]
+    ): RefreshableBuilder[F, A] =
+      copy(onRefreshFailure = onRefreshFailure)
+
+    def onExhaustedRetries(
+        onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
+    ): RefreshableBuilder[F, A] = copy(onExhaustedRetries = onExhaustedRetries)
+
+    def onNewValue(
+        onNewValue: (A, FiniteDuration) => F[Unit]
+    ): RefreshableBuilder[F, A] = copy(onNewValue = Some(onNewValue))
+
+    def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
+      copy(defaultValue = Some(defaultValue))
+
+    def resource: Resource[F, Refreshable[F, A]] =
+      derivedRetry(
+        refresh,
+        cacheDuration,
+        retryPolicy,
+        onRefreshFailure,
+        onExhaustedRetries,
+        onNewValue,
+        defaultValue
+      )
+
   }
 }

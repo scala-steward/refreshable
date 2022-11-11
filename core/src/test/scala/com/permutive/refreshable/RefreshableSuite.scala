@@ -377,15 +377,19 @@ class RefreshableSuite extends CatsEffectSuite {
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
-    ): Resource[IO, Refreshable[IO, A]] = Refreshable.resource(
-      refresh,
-      cacheDuration,
-      onRefreshFailure,
-      onExhaustedRetries,
-      onNewValue,
-      defaultValue,
-      retryPolicy
-    )
+    ): Resource[IO, Refreshable[IO, A]] = {
+      val b1 = Refreshable
+        .builder(refresh)
+        .cacheDuration(cacheDuration)
+        .onRefreshFailure(onRefreshFailure)
+        .onExhaustedRetries(onExhaustedRetries)
+
+      val b2 = onNewValue.fold(b1)(v => b1.onNewValue(v))
+
+      val b3 = defaultValue.fold(b2)(v => b2.defaultValue(v))
+
+      retryPolicy.fold(b3)(v => b3.retryPolicy(v)).resource
+    }
   }
 
   object Derived extends RefreshableFactory {
@@ -400,19 +404,20 @@ class RefreshableSuite extends CatsEffectSuite {
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
-    ): Resource[IO, Refreshable[IO, A]] = Refreshable
-      .derivedRetry(
-        refresh,
-        cacheDuration,
-        retryPolicy.fold((_: A) => Refreshable.defaultPolicy[IO])(p =>
-          (_: A) => p
-        ),
-        onRefreshFailure,
-        onExhaustedRetries,
-        onNewValue,
-        defaultValue
-      )
-      .map(_.mapK(FunctionK.id[IO]))
+    ): Resource[IO, Refreshable[IO, A]] = {
+      val b1 = Refreshable
+        .builder(refresh)
+        .cacheDuration(cacheDuration)
+        .onRefreshFailure(onRefreshFailure)
+        .onExhaustedRetries(onExhaustedRetries)
+
+      val b2 = onNewValue.fold(b1)(v => b1.onNewValue(v))
+
+      val b3 = defaultValue.fold(b2)(v => b2.defaultValue(v))
+
+      retryPolicy.fold(b3)(v => b3.retryPolicy(v)).resource
+
+    }
   }
 
   object MapK extends RefreshableFactory {
@@ -427,7 +432,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
-    ): Resource[IO, Refreshable[IO, A]] = Refreshable
+    ): Resource[IO, Refreshable[IO, A]] = Default
       .resource(
         refresh,
         cacheDuration,
