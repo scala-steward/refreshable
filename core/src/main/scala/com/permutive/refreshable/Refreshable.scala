@@ -269,10 +269,11 @@ object Refreshable {
     * @param cacheDuration
     *   how long to cache a newly generated value of `A` for, if an effect is
     *   needed to generate this duration it should have occurred in `fa`.
-    *   Arbitrarily defaults to 30 seconds if not specified.
+    *   Defaults to [[defaultCacheDuration]] if not specified.
     * @param retryPolicy
     *   a function to derive a configuration object for attempting to retry the
-    *   effect of `fa` on failure from the current value of `A`.
+    *   effect of `fa` on failure from the current value of `A`. Defaults to
+    *   [[defaultRetryPolicy]] when not specified
     * @param onRefreshFailure
     *   what to when an attempt to refresh the value fails, `fa` will be retried
     *   according to `retryPolicy`
