@@ -236,8 +236,8 @@ object Refreshable {
         refresh = fa,
         cacheDuration = defaultCacheDuration[A],
         retryPolicy = _ => defaultPolicy[F],
-        onRefreshFailure = _ => Applicative[F].unit,
-        onExhaustedRetries = _ => Applicative[F].unit,
+        onRefreshFailure = { case _ => Applicative[F].unit },
+        onExhaustedRetries = { case _ => Applicative[F].unit },
         onNewValue = None,
         defaultValue = None
       )
