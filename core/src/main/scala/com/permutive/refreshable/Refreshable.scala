@@ -72,6 +72,8 @@ object Refreshable {
       .constantDelay[F](200.millis)
       .join(RetryPolicies.limitRetries(5))
 
+  def defaultCacheDuration[A]: A => FiniteDuration = _ => 30.seconds
+
   /** Builder to construct a [[Refreshable]]
     */
   def builder[F[_]: Temporal, A](refresh: F[A]): RefreshableBuilder[F, A] =
@@ -232,7 +234,7 @@ object Refreshable {
     def builder[F[_]: Temporal, A](fa: F[A]): RefreshableBuilder[F, A] =
       new RefreshableBuilder[F, A](
         refresh = fa,
-        cacheDuration = _ => 30.seconds,
+        cacheDuration = defaultCacheDuration[A],
         retryPolicy = _ => defaultPolicy[F],
         onRefreshFailure = _ => Applicative[F].unit,
         onExhaustedRetries = _ => Applicative[F].unit,
