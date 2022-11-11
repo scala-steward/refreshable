@@ -232,7 +232,7 @@ object Refreshable {
     def builder[F[_]: Temporal, A](fa: F[A]): RefreshableBuilder[F, A] =
       new RefreshableBuilder[F, A](
         refresh = fa,
-        cacheDuration = _ => 1.second,
+        cacheDuration = _ => 30.seconds,
         retryPolicy = _ => defaultPolicy[F],
         onRefreshFailure = _ => Applicative[F].unit,
         onExhaustedRetries = _ => Applicative[F].unit,
@@ -267,9 +267,10 @@ object Refreshable {
     * @param cacheDuration
     *   how long to cache a newly generated value of `A` for, if an effect is
     *   needed to generate this duration it should have occurred in `fa`.
-    * @param retryPolicy a function to derive a configuration object for
-    *   attempting to retry the effect of `fa` on failure from the current value
-    *   of `A`.
+    *   Arbitrarily defaults to 30 seconds if not specified.
+    * @param retryPolicy
+    *   a function to derive a configuration object for attempting to retry the
+    *   effect of `fa` on failure from the current value of `A`.
     * @param onRefreshFailure
     *   what to when an attempt to refresh the value fails, `fa` will be retried
     *   according to `retryPolicy`
