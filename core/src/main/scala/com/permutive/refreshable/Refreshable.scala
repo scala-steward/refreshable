@@ -21,6 +21,7 @@ import cats.effect.syntax.all._
 import cats.syntax.all._
 import cats.{~>, Applicative, Functor}
 import fs2.Stream
+import fs2.concurrent.SignallingRef
 import retry._
 
 import scala.concurrent.duration._
@@ -164,7 +165,7 @@ object Refreshable {
     override def restart: G[Boolean] = fk(self.restart)
   }
 
-  private final class RefreshableImpl[F[_]: Concurrent, A] private (
+  private class RefreshableImpl[F[_]: Concurrent, A] private (
       val store: Ref[F, CachedValue[A]],
       val fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
       val makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
@@ -203,6 +204,25 @@ object Refreshable {
         fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
         makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
     ): RefreshableImpl[F, A] = new RefreshableImpl(store, fiberStore, makeFiber)
+
+    private class RefreshableUpdatesImpl[F[_]: Concurrent, A] private (
+        store: SignallingRef[F, CachedValue[A]],
+        fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
+        makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
+    ) extends RefreshableImpl[F, A](store, fiberStore, makeFiber)
+        with RefreshableUpdates[F, A] {
+
+      override val updates: Stream[F, CachedValue[A]] = store.discrete
+    }
+
+    object RefreshableUpdatesImpl {
+      def apply[F[_]: Concurrent, A](
+          store: SignallingRef[F, CachedValue[A]],
+          fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
+          makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
+      ): RefreshableUpdates[F, A] =
+        new RefreshableUpdatesImpl(store, fiberStore, makeFiber)
+    }
   }
 
   private object RefreshableBuilder {
@@ -235,7 +255,28 @@ object Refreshable {
           onExhaustedRetries,
           onNewValue,
           defaultValue
+        ) {
+
+      override def resource: Resource[F, Refreshable[F, A]] = {
+        val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
+        for {
+          a <- Resource.eval[F, CachedValue[A]](
+            defaultValue.fold(fa)(default =>
+              fa.handleError(th => CachedValue.Error(default, th))
+            )
+          )
+          store <- Resource.eval(SignallingRef.of[F, CachedValue[A]](a))
+          fiberStore <- Resource.eval(
+            Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
+          )
+          _ <- runBackground(store, fiberStore)
+        } yield RefreshableImpl.RefreshableUpdatesImpl(
+          store,
+          fiberStore,
+          makeFiber(store)
         )
+      }
+    }
 
   }
 
@@ -343,6 +384,33 @@ object Refreshable {
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
+    def withUpdates: RefreshableBuilder[F, A] =
+      new RefreshableBuilder.RefreshableUpdatesBuilder[F, A](
+        refresh,
+        cacheDuration,
+        retryPolicy,
+        onRefreshFailure,
+        onExhaustedRetries,
+        onNewValue,
+        defaultValue
+      )
+
+    def resource: Resource[F, Refreshable[F, A]] = {
+      val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
+      for {
+        a <- Resource.eval[F, CachedValue[A]](
+          defaultValue.fold(fa)(default =>
+            fa.handleError(th => CachedValue.Error(default, th))
+          )
+        )
+        store <- Resource.eval(Ref.of[F, CachedValue[A]](a))
+        fiberStore <- Resource.eval(
+          Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
+        )
+        _ <- runBackground(store, fiberStore)
+      } yield RefreshableImpl(store, fiberStore, makeFiber(store))
+    }
+
     protected def makeFiber(
         store: Ref[F, CachedValue[A]]
     )(wait: Deferred[F, Unit]) = (wait.get >> store.get
@@ -375,22 +443,6 @@ object Refreshable {
             fiberStore.get.flatMap(_.traverse_(_.cancel))
           )
       } yield ()).uncancelable
-
-    def resource: Resource[F, Refreshable[F, A]] = {
-      val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
-      for {
-        a <- Resource.eval[F, CachedValue[A]](
-          defaultValue.fold(fa)(default =>
-            fa.handleError(th => CachedValue.Error(default, th))
-          )
-        )
-        store <- Resource.eval(Ref.of[F, CachedValue[A]](a))
-        fiberStore <- Resource.eval(
-          Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
-        )
-        _ <- runBackground(store, fiberStore)
-      } yield RefreshableImpl(store, fiberStore, makeFiber(store))
-    }
 
   }
 }
