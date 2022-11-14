@@ -371,7 +371,9 @@ object Refreshable {
         )
         fiber <- Resource.eval(makeFiber(store)(wait))
         _ <- Resource
-          .make(fiberStore.set(Some(fiber)))(_ => fiber.cancel)
+          .make(fiberStore.set(Some(fiber)))(_ =>
+            fiberStore.get.flatMap(_.traverse_(_.cancel))
+          )
       } yield ()).uncancelable
 
     def resource: Resource[F, Refreshable[F, A]] = {
