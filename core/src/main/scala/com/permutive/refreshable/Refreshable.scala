@@ -72,41 +72,6 @@ trait Refreshable[F[_], A] { self =>
 
 }
 
-trait RefreshableUpdates[F[_], A] extends Refreshable[F, A] { self =>
-
-  /** Subscribe to discrete updates of the underlying value
-    */
-  def updates: Stream[F, CachedValue[A]]
-
-  override def mapK[G[_]: Functor](fk: F ~> G): RefreshableUpdates[G, A] =
-    new RefreshableUpdates[G, A] {
-
-      override def updates: Stream[G, CachedValue[A]] =
-        self.updates.translate(fk)
-
-      override protected def functor: Functor[G] = implicitly
-
-      override def get: G[CachedValue[A]] = fk(self.get)
-
-      override def cancel: G[Boolean] = fk(self.cancel)
-
-      override def restart: G[Boolean] = fk(self.restart)
-    }
-
-  override def map[C](f: A => C): RefreshableUpdates[F, C] =
-    new RefreshableUpdates[F, C] {
-
-      implicit override protected def functor: Functor[F] = self.functor
-
-      override def get: F[CachedValue[C]] = self.get.map(_.map(f))
-      override def cancel: F[Boolean] = self.cancel
-      override def restart: F[Boolean] = self.restart
-
-      override def updates: Stream[F, CachedValue[C]] =
-        self.updates.map(_.map(f))
-    }
-}
-
 object Refreshable {
 
   /** The default retry policy used when none is specified.
@@ -122,6 +87,41 @@ object Refreshable {
     */
   def builder[F[_]: Temporal, A](refresh: F[A]): RefreshableBuilder[F, A] =
     RefreshableBuilder.builder(refresh)
+
+  trait Updates[F[_], A] extends Refreshable[F, A] { self =>
+
+    /** Subscribe to discrete updates of the underlying value
+      */
+    def updates: Stream[F, CachedValue[A]]
+
+    override def mapK[G[_]: Functor](fk: F ~> G): Refreshable.Updates[G, A] =
+      new Refreshable.Updates[G, A] {
+
+        override def updates: Stream[G, CachedValue[A]] =
+          self.updates.translate(fk)
+
+        override protected def functor: Functor[G] = implicitly
+
+        override def get: G[CachedValue[A]] = fk(self.get)
+
+        override def cancel: G[Boolean] = fk(self.cancel)
+
+        override def restart: G[Boolean] = fk(self.restart)
+      }
+
+    override def map[C](f: A => C): Refreshable.Updates[F, C] =
+      new Refreshable.Updates[F, C] {
+
+        implicit override protected def functor: Functor[F] = self.functor
+
+        override def get: F[CachedValue[C]] = self.get.map(_.map(f))
+        override def cancel: F[Boolean] = self.cancel
+        override def restart: F[Boolean] = self.restart
+
+        override def updates: Stream[F, CachedValue[C]] =
+          self.updates.map(_.map(f))
+      }
+  }
 
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
@@ -447,7 +447,7 @@ object Refreshable {
 
     override def withUpdates: RefreshableUpdatesBuilder[F, A] = self
 
-    override def resource: Resource[F, RefreshableUpdates[F, A]] = {
+    override def resource: Resource[F, Refreshable.Updates[F, A]] = {
       val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
       for {
         a <- Resource.eval[F, CachedValue[A]](
@@ -513,7 +513,7 @@ object Refreshable {
         fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
         makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
     ) extends RefreshableImpl[F, A](store, fiberStore, makeFiber)
-        with RefreshableUpdates[F, A] {
+        with Refreshable.Updates[F, A] {
 
       override val updates: Stream[F, CachedValue[A]] = store.discrete
     }
@@ -523,7 +523,7 @@ object Refreshable {
           store: SignallingRef[F, CachedValue[A]],
           fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
           makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
-      ): RefreshableUpdates[F, A] =
+      ): Refreshable.Updates[F, A] =
         new RefreshableUpdatesImpl(store, fiberStore, makeFiber)
     }
   }
