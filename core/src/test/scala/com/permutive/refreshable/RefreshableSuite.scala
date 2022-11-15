@@ -362,7 +362,7 @@ class RefreshableSuite extends CatsEffectSuite {
   }
 
   suite(Default)
-  suite(Derived)
+  suite(Updates)
   suite(MapK)
 
   object Default extends RefreshableFactory {
@@ -392,9 +392,9 @@ class RefreshableSuite extends CatsEffectSuite {
     }
   }
 
-  object Derived extends RefreshableFactory {
+  object Updates extends RefreshableFactory {
 
-    override val name: String = "derived"
+    override val name: String = "updates"
 
     override def resource[A](
         refresh: IO[A],
@@ -410,6 +410,7 @@ class RefreshableSuite extends CatsEffectSuite {
         .cacheDuration(cacheDuration)
         .onRefreshFailure(onRefreshFailure)
         .onExhaustedRetries(onExhaustedRetries)
+        .withUpdates
 
       val b2 = onNewValue.fold(b1)(v => b1.onNewValue(v))
 
