@@ -258,7 +258,7 @@ object Refreshable {
         store: Ref[F, CachedValue[A]]
     )(wait: Deferred[F, Unit]) = (wait.get >> store.get
       .flatMap(a =>
-        refreshLoop[F, A](
+        refreshLoop(
           a.value,
           refresh,
           store.set(_),
@@ -287,7 +287,7 @@ object Refreshable {
           )
       } yield ()).uncancelable
 
-    private def refreshLoop[F[_]: Temporal, A](
+    private def refreshLoop(
         initialA: A,
         fa: F[A],
         set: CachedValue[A] => F[Unit],
