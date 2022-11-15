@@ -237,47 +237,95 @@ object Refreshable {
         defaultValue = None
       )
 
-    class RefreshableUpdatesBuilder[F[_]: Temporal, A](
-        refresh: F[A],
-        cacheDuration: A => FiniteDuration,
-        retryPolicy: A => RetryPolicy[F],
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[
-          Unit
-        ]],
-        onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-        onNewValue: Option[(A, FiniteDuration) => F[Unit]],
-        defaultValue: Option[A]
-    ) extends RefreshableBuilder[F, A](
-          refresh,
-          cacheDuration,
-          retryPolicy,
-          onRefreshFailure,
-          onExhaustedRetries,
-          onNewValue,
-          defaultValue
-        ) {
+  }
 
-      override def resource: Resource[F, Refreshable[F, A]] = {
-        val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
-        for {
-          a <- Resource.eval[F, CachedValue[A]](
-            defaultValue.fold(fa)(default =>
-              fa.handleError(th => CachedValue.Error(default, th))
-            )
+  class RefreshableUpdatesBuilder[F[_]: Temporal, A] private[refreshable](
+      refresh: F[A],
+      cacheDuration: A => FiniteDuration,
+      retryPolicy: A => RetryPolicy[F],
+      onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[
+        Unit
+      ]],
+      onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
+      onNewValue: Option[(A, FiniteDuration) => F[Unit]],
+      defaultValue: Option[A]
+  ) extends RefreshableBuilder[F, A](
+        refresh,
+        cacheDuration,
+        retryPolicy,
+        onRefreshFailure,
+        onExhaustedRetries,
+        onNewValue,
+        defaultValue
+      ) { self =>
+
+    private def copy(
+        refresh: F[A] = self.refresh,
+        cacheDuration: A => FiniteDuration = self.cacheDuration,
+        retryPolicy: A => RetryPolicy[F] = self.retryPolicy,
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]] =
+          self.onRefreshFailure,
+        onExhaustedRetries: PartialFunction[Throwable, F[Unit]] =
+          self.onExhaustedRetries,
+        onNewValue: Option[(A, FiniteDuration) => F[Unit]] = self.onNewValue,
+        defaultValue: Option[A] = self.defaultValue
+    ): RefreshableUpdatesBuilder[F, A] = new RefreshableUpdatesBuilder[F, A](
+      refresh,
+      cacheDuration,
+      retryPolicy,
+      onRefreshFailure,
+      onExhaustedRetries,
+      onNewValue,
+      defaultValue
+    )
+
+    override def cacheDuration(
+        cacheDuration: A => FiniteDuration
+    ): RefreshableUpdatesBuilder[F, A] = copy(cacheDuration = cacheDuration)
+
+    override def retryPolicy(
+        retryPolicy: A => RetryPolicy[F]
+    ): RefreshableUpdatesBuilder[F, A] = copy(retryPolicy = retryPolicy)
+
+    override def retryPolicy(
+        retryPolicy: RetryPolicy[F]
+    ): RefreshableUpdatesBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
+
+    override def onRefreshFailure(
+        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]]
+    ): RefreshableUpdatesBuilder[F, A] =
+      copy(onRefreshFailure = onRefreshFailure)
+
+    override def onExhaustedRetries(
+        onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
+    ): RefreshableUpdatesBuilder[F, A] = copy(onExhaustedRetries = onExhaustedRetries)
+
+    override def onNewValue(
+        onNewValue: (A, FiniteDuration) => F[Unit]
+    ): RefreshableUpdatesBuilder[F, A] = copy(onNewValue = Some(onNewValue))
+
+    override def defaultValue(defaultValue: A): RefreshableUpdatesBuilder[F, A] =
+      copy(defaultValue = Some(defaultValue))
+
+    override def resource: Resource[F, RefreshableUpdates[F, A]] = {
+      val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
+      for {
+        a <- Resource.eval[F, CachedValue[A]](
+          defaultValue.fold(fa)(default =>
+            fa.handleError(th => CachedValue.Error(default, th))
           )
-          store <- Resource.eval(SignallingRef.of[F, CachedValue[A]](a))
-          fiberStore <- Resource.eval(
-            Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
-          )
-          _ <- runBackground(store, fiberStore)
-        } yield RefreshableImpl.RefreshableUpdatesImpl(
-          store,
-          fiberStore,
-          makeFiber(store)
         )
-      }
+        store <- Resource.eval(SignallingRef.of[F, CachedValue[A]](a))
+        fiberStore <- Resource.eval(
+          Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
+        )
+        _ <- runBackground(store, fiberStore)
+      } yield RefreshableImpl.RefreshableUpdatesImpl(
+        store,
+        fiberStore,
+        makeFiber(store)
+      )
     }
-
   }
 
   /** Caches a single instance of type `A` for a period of time before
@@ -326,7 +374,7 @@ object Refreshable {
     *   call to `fa` fails. This will prevent the constructor from failing
     *   during startup
     */
-  class RefreshableBuilder[F[_]: Temporal, A] private (
+  class RefreshableBuilder[F[_]: Temporal, A] private[refreshable] (
       val refresh: F[A],
       val cacheDuration: A => FiniteDuration,
       val retryPolicy: A => RetryPolicy[F],
@@ -384,8 +432,8 @@ object Refreshable {
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
-    def withUpdates: RefreshableBuilder[F, A] =
-      new RefreshableBuilder.RefreshableUpdatesBuilder[F, A](
+    def withUpdates: RefreshableUpdatesBuilder[F, A] =
+      new RefreshableUpdatesBuilder[F, A](
         refresh,
         cacheDuration,
         retryPolicy,

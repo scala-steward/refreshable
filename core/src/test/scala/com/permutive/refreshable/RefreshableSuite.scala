@@ -365,6 +365,21 @@ class RefreshableSuite extends CatsEffectSuite {
   suite(Updates)
   suite(MapK)
 
+  test("See all updates") {
+    val run = IO.ref(0).flatMap { state =>
+      Refreshable.builder(state.getAndUpdate(_ + 1)).withUpdates.resource.use {
+        r =>
+          r.updates
+            .take(5)
+            .compile
+            .toList
+            .assertEquals(List.range(0, 5).map(CachedValue.Success(_)))
+      }
+    }
+
+    TestControl.executeEmbed(run)
+  }
+
   object Default extends RefreshableFactory {
 
     override val name: String = "default"
