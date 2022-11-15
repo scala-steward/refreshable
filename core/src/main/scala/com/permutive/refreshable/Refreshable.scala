@@ -239,7 +239,53 @@ object Refreshable {
 
   }
 
-  class RefreshableUpdatesBuilder[F[_]: Temporal, A] private[refreshable](
+  /** Caches a single instance of type `A` for a period of time before
+    * refreshing it automatically.
+    *
+    * The time between refreshes is dynamic and based on the value of each `A`
+    * itself. This is similar to `RefreshableEffect` except that only exposes a
+    * fixed refresh frequency.
+    *
+    * As well as the time between refreshes, the retry policy is also dynamic
+    * and based on the value for `A`. This allows you to configure the policy
+    * based on when `A` is going to expire.
+    *
+    * You can use the `cacheDuration` and `retryPolicy` together to eagerly
+    * fetch a new value for `A` using the calculated cache duration minus some
+    * duration to allow for retries and then set the retry policy to retry
+    * throughout that duration.
+    *
+    * An old value is only made unavailable _after_ a new value has been
+    * acquired. This means that the time each value is exposed for is
+    * `cacheDuration` plus the time to evaluate `fa`.
+    *
+    * @param refresh
+    *   generate a new value of `A`
+    * @param cacheDuration
+    *   how long to cache a newly generated value of `A` for, if an effect is
+    *   needed to generate this duration it should have occurred in `fa`.
+    *   Defaults to [[defaultCacheDuration]] if not specified.
+    * @param retryPolicy
+    *   a function to derive a configuration object for attempting to retry the
+    *   effect of `fa` on failure from the current value of `A`. Defaults to
+    *   [[defaultRetryPolicy]] when not specified
+    * @param onRefreshFailure
+    *   what to when an attempt to refresh the value fails, `fa` will be retried
+    *   according to `retryPolicy`
+    * @param onExhaustedRetries
+    *   what to do if retrying to refresh the value fails. The refresh fiber
+    *   will have failed at this point and the value will grow stale. It is up
+    *   to user handle this failure, as they see fit, in their application
+    * @param onNewValue
+    *   a callback invoked whenever a new value is generated, the
+    *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
+    *   waited before the next new value
+    * @param defaultValue
+    *   an optional default value to use when initialising the resource, if the
+    *   call to `fa` fails. This will prevent the constructor from failing
+    *   during startup
+    */
+  class RefreshableUpdatesBuilder[F[_]: Temporal, A] private[refreshable] (
       refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
@@ -298,14 +344,19 @@ object Refreshable {
 
     override def onExhaustedRetries(
         onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
-    ): RefreshableUpdatesBuilder[F, A] = copy(onExhaustedRetries = onExhaustedRetries)
+    ): RefreshableUpdatesBuilder[F, A] =
+      copy(onExhaustedRetries = onExhaustedRetries)
 
     override def onNewValue(
         onNewValue: (A, FiniteDuration) => F[Unit]
     ): RefreshableUpdatesBuilder[F, A] = copy(onNewValue = Some(onNewValue))
 
-    override def defaultValue(defaultValue: A): RefreshableUpdatesBuilder[F, A] =
+    override def defaultValue(
+        defaultValue: A
+    ): RefreshableUpdatesBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
+
+    override def withUpdates: RefreshableUpdatesBuilder[F, A] = self
 
     override def resource: Resource[F, RefreshableUpdates[F, A]] = {
       val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
