@@ -227,8 +227,8 @@ object Refreshable {
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
-    def withUpdates: RefreshableUpdatesBuilder[F, A] =
-      new RefreshableUpdatesBuilder[F, A](
+    def withUpdates: UpdatesBuilder[F, A] =
+      new UpdatesBuilder[F, A](
         refresh,
         cacheDuration,
         retryPolicy,
@@ -374,7 +374,7 @@ object Refreshable {
     *   call to `fa` fails. This will prevent the constructor from failing
     *   during startup
     */
-  class RefreshableUpdatesBuilder[F[_]: Temporal, A] private[refreshable] (
+  class UpdatesBuilder[F[_]: Temporal, A] private[refreshable] (
       refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
@@ -404,7 +404,7 @@ object Refreshable {
           self.onExhaustedRetries,
         onNewValue: Option[(A, FiniteDuration) => F[Unit]] = self.onNewValue,
         defaultValue: Option[A] = self.defaultValue
-    ): RefreshableUpdatesBuilder[F, A] = new RefreshableUpdatesBuilder[F, A](
+    ): UpdatesBuilder[F, A] = new UpdatesBuilder[F, A](
       refresh,
       cacheDuration,
       retryPolicy,
@@ -416,36 +416,36 @@ object Refreshable {
 
     override def cacheDuration(
         cacheDuration: A => FiniteDuration
-    ): RefreshableUpdatesBuilder[F, A] = copy(cacheDuration = cacheDuration)
+    ): UpdatesBuilder[F, A] = copy(cacheDuration = cacheDuration)
 
     override def retryPolicy(
         retryPolicy: A => RetryPolicy[F]
-    ): RefreshableUpdatesBuilder[F, A] = copy(retryPolicy = retryPolicy)
+    ): UpdatesBuilder[F, A] = copy(retryPolicy = retryPolicy)
 
     override def retryPolicy(
         retryPolicy: RetryPolicy[F]
-    ): RefreshableUpdatesBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
+    ): UpdatesBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
 
     override def onRefreshFailure(
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]]
-    ): RefreshableUpdatesBuilder[F, A] =
+    ): UpdatesBuilder[F, A] =
       copy(onRefreshFailure = onRefreshFailure)
 
     override def onExhaustedRetries(
         onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
-    ): RefreshableUpdatesBuilder[F, A] =
+    ): UpdatesBuilder[F, A] =
       copy(onExhaustedRetries = onExhaustedRetries)
 
     override def onNewValue(
         onNewValue: (A, FiniteDuration) => F[Unit]
-    ): RefreshableUpdatesBuilder[F, A] = copy(onNewValue = Some(onNewValue))
+    ): UpdatesBuilder[F, A] = copy(onNewValue = Some(onNewValue))
 
     override def defaultValue(
         defaultValue: A
-    ): RefreshableUpdatesBuilder[F, A] =
+    ): UpdatesBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
-    override def withUpdates: RefreshableUpdatesBuilder[F, A] = self
+    override def withUpdates: UpdatesBuilder[F, A] = self
 
     override def resource: Resource[F, Refreshable.Updates[F, A]] = {
       val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
