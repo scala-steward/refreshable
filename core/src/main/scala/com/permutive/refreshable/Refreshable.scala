@@ -153,14 +153,14 @@ object Refreshable {
     *   a function to derive a configuration object for attempting to retry the
     *   effect of `fa` on failure from the current value of `A`. Defaults to
     *   [[defaultRetryPolicy]] when not specified
-    * @param onRefreshFailure
+    * @param refreshFailureCallback
     *   what to when an attempt to refresh the value fails, `fa` will be retried
     *   according to `retryPolicy`
-    * @param onExhaustedRetries
+    * @param exhaustedRetriesCallback
     *   what to do if retrying to refresh the value fails. The refresh fiber
     *   will have failed at this point and the value will grow stale. It is up
     *   to user handle this failure, as they see fit, in their application
-    * @param onNewValue
+    * @param newValueCallback
     *   a callback invoked whenever a new value is generated, the
     *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
     *   waited before the next new value
@@ -173,9 +173,11 @@ object Refreshable {
       val refresh: F[A],
       val cacheDuration: A => FiniteDuration,
       val retryPolicy: A => RetryPolicy[F],
-      val onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
-      val onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      val onNewValue: Option[(A, FiniteDuration) => F[Unit]],
+      val refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
+        Unit
+      ]],
+      val exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
+      val newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
       val defaultValue: Option[A]
   ) { self =>
 
@@ -183,19 +185,21 @@ object Refreshable {
         refresh: F[A] = self.refresh,
         cacheDuration: A => FiniteDuration = self.cacheDuration,
         retryPolicy: A => RetryPolicy[F] = self.retryPolicy,
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]] =
-          self.onRefreshFailure,
-        onExhaustedRetries: PartialFunction[Throwable, F[Unit]] =
-          self.onExhaustedRetries,
-        onNewValue: Option[(A, FiniteDuration) => F[Unit]] = self.onNewValue,
+        refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
+          Unit
+        ]] = self.refreshFailureCallback,
+        exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]] =
+          self.exhaustedRetriesCallback,
+        newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
+          self.newValueCallback,
         defaultValue: Option[A] = self.defaultValue
     ): RefreshableBuilder[F, A] = new RefreshableBuilder[F, A](
       refresh,
       cacheDuration,
       retryPolicy,
-      onRefreshFailure,
-      onExhaustedRetries,
-      onNewValue,
+      refreshFailureCallback,
+      exhaustedRetriesCallback,
+      newValueCallback,
       defaultValue
     )
 
@@ -212,17 +216,17 @@ object Refreshable {
     ): RefreshableBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
 
     def onRefreshFailure(
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]]
+        callback: PartialFunction[(Throwable, RetryDetails), F[Unit]]
     ): RefreshableBuilder[F, A] =
-      copy(onRefreshFailure = onRefreshFailure)
+      copy(refreshFailureCallback = callback)
 
     def onExhaustedRetries(
-        onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
-    ): RefreshableBuilder[F, A] = copy(onExhaustedRetries = onExhaustedRetries)
+        callback: PartialFunction[Throwable, F[Unit]]
+    ): RefreshableBuilder[F, A] = copy(exhaustedRetriesCallback = callback)
 
     def onNewValue(
-        onNewValue: (A, FiniteDuration) => F[Unit]
-    ): RefreshableBuilder[F, A] = copy(onNewValue = Some(onNewValue))
+        callback: (A, FiniteDuration) => F[Unit]
+    ): RefreshableBuilder[F, A] = copy(newValueCallback = Some(callback))
 
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
@@ -232,9 +236,9 @@ object Refreshable {
         refresh,
         cacheDuration,
         retryPolicy,
-        onRefreshFailure,
-        onExhaustedRetries,
-        onNewValue,
+        refreshFailureCallback,
+        exhaustedRetriesCallback,
+        newValueCallback,
         defaultValue
       )
 
@@ -263,10 +267,10 @@ object Refreshable {
           refresh,
           store.set(_),
           cacheDuration,
-          onRefreshFailure,
-          onNewValue.getOrElse((_, _) => Applicative[F].unit),
+          refreshFailureCallback,
+          newValueCallback.getOrElse((_, _) => Applicative[F].unit),
           retryPolicy
-        ).handleErrorWith(th => onExhaustedRetries.lift(th).sequence_)
+        ).handleErrorWith(th => exhaustedRetriesCallback.lift(th).sequence_)
       )).start
 
     protected def runBackground(
@@ -358,14 +362,14 @@ object Refreshable {
     *   a function to derive a configuration object for attempting to retry the
     *   effect of `fa` on failure from the current value of `A`. Defaults to
     *   [[defaultRetryPolicy]] when not specified
-    * @param onRefreshFailure
+    * @param refreshFailureCallback
     *   what to when an attempt to refresh the value fails, `fa` will be retried
     *   according to `retryPolicy`
-    * @param onExhaustedRetries
+    * @param exhaustedRetriesCallback
     *   what to do if retrying to refresh the value fails. The refresh fiber
     *   will have failed at this point and the value will grow stale. It is up
     *   to user handle this failure, as they see fit, in their application
-    * @param onNewValue
+    * @param newValueCallback
     *   a callback invoked whenever a new value is generated, the
     *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
     *   waited before the next new value
@@ -378,19 +382,19 @@ object Refreshable {
       refresh: F[A],
       cacheDuration: A => FiniteDuration,
       retryPolicy: A => RetryPolicy[F],
-      onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[
+      refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
         Unit
       ]],
-      onExhaustedRetries: PartialFunction[Throwable, F[Unit]],
-      onNewValue: Option[(A, FiniteDuration) => F[Unit]],
+      exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
+      newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
       defaultValue: Option[A]
   ) extends RefreshableBuilder[F, A](
         refresh,
         cacheDuration,
         retryPolicy,
-        onRefreshFailure,
-        onExhaustedRetries,
-        onNewValue,
+        refreshFailureCallback,
+        exhaustedRetriesCallback,
+        newValueCallback,
         defaultValue
       ) { self =>
 
@@ -398,19 +402,21 @@ object Refreshable {
         refresh: F[A] = self.refresh,
         cacheDuration: A => FiniteDuration = self.cacheDuration,
         retryPolicy: A => RetryPolicy[F] = self.retryPolicy,
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]] =
-          self.onRefreshFailure,
-        onExhaustedRetries: PartialFunction[Throwable, F[Unit]] =
-          self.onExhaustedRetries,
-        onNewValue: Option[(A, FiniteDuration) => F[Unit]] = self.onNewValue,
+        refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
+          Unit
+        ]] = self.refreshFailureCallback,
+        exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]] =
+          self.exhaustedRetriesCallback,
+        newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
+          self.newValueCallback,
         defaultValue: Option[A] = self.defaultValue
     ): UpdatesBuilder[F, A] = new UpdatesBuilder[F, A](
       refresh,
       cacheDuration,
       retryPolicy,
-      onRefreshFailure,
-      onExhaustedRetries,
-      onNewValue,
+      refreshFailureCallback,
+      exhaustedRetriesCallback,
+      newValueCallback,
       defaultValue
     )
 
@@ -427,18 +433,18 @@ object Refreshable {
     ): UpdatesBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
 
     override def onRefreshFailure(
-        onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]]
+        callback: PartialFunction[(Throwable, RetryDetails), F[Unit]]
     ): UpdatesBuilder[F, A] =
-      copy(onRefreshFailure = onRefreshFailure)
+      copy(refreshFailureCallback = callback)
 
     override def onExhaustedRetries(
-        onExhaustedRetries: PartialFunction[Throwable, F[Unit]]
+        callback: PartialFunction[Throwable, F[Unit]]
     ): UpdatesBuilder[F, A] =
-      copy(onExhaustedRetries = onExhaustedRetries)
+      copy(exhaustedRetriesCallback = callback)
 
     override def onNewValue(
-        onNewValue: (A, FiniteDuration) => F[Unit]
-    ): UpdatesBuilder[F, A] = copy(onNewValue = Some(onNewValue))
+        callback: (A, FiniteDuration) => F[Unit]
+    ): UpdatesBuilder[F, A] = copy(newValueCallback = Some(callback))
 
     override def defaultValue(
         defaultValue: A
@@ -534,9 +540,9 @@ object Refreshable {
         refresh = fa,
         cacheDuration = defaultCacheDuration[A],
         retryPolicy = _ => defaultPolicy[F],
-        onRefreshFailure = PartialFunction.empty,
-        onExhaustedRetries = PartialFunction.empty,
-        onNewValue = None,
+        refreshFailureCallback = PartialFunction.empty,
+        exhaustedRetriesCallback = PartialFunction.empty,
+        newValueCallback = None,
         defaultValue = None
       )
 
