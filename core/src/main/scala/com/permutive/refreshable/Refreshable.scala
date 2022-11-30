@@ -90,35 +90,6 @@ object Refreshable {
   def builder[F[_]: Temporal, A](refresh: F[A]): RefreshableBuilder[F, A] =
     RefreshableBuilder.builder(refresh)
 
-  abstract class Updates[F[_]: Functor, A] extends Refreshable[F, A] { self =>
-
-    /** Subscribe to discrete updates of the underlying value
-      */
-    def updates: Stream[F, CachedValue[A]]
-
-    override def mapK[G[_]: Functor](fk: F ~> G): Refreshable.Updates[G, A] =
-      new Refreshable.Updates[G, A] {
-
-        override def updates: Stream[G, CachedValue[A]] =
-          self.updates.translate(fk)
-        override def get: G[CachedValue[A]] = fk(self.get)
-
-        override def cancel: G[Boolean] = fk(self.cancel)
-
-        override def restart: G[Boolean] = fk(self.restart)
-      }
-
-    override def map[C](f: A => C): Refreshable.Updates[F, C] =
-      new Refreshable.Updates[F, C] {
-        override def get: F[CachedValue[C]] = self.get.map(_.map(f))
-        override def cancel: F[Boolean] = self.cancel
-        override def restart: F[Boolean] = self.restart
-
-        override def updates: Stream[F, CachedValue[C]] =
-          self.updates.map(_.map(f))
-      }
-  }
-
   /** Caches a single instance of type `A` for a period of time before
     * refreshing it automatically.
     *
