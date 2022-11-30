@@ -26,9 +26,7 @@ import retry._
 
 import scala.concurrent.duration._
 
-trait Refreshable[F[_], A] { self =>
-
-  implicit protected def functor: Functor[F]
+abstract class Refreshable[F[_]: Functor, A] { self =>
 
   /** Get the unwrapped value of `A`
     */
@@ -37,6 +35,10 @@ trait Refreshable[F[_], A] { self =>
   /** Get the value of `A` wrapped in a status
     */
   def get: F[CachedValue[A]]
+
+  /** Subscribe to discrete updates of the underlying value
+    */
+  def updates: Stream[F, CachedValue[A]]
 
   /** Cancel refreshing
     *
@@ -55,17 +57,17 @@ trait Refreshable[F[_], A] { self =>
   def restart: F[Boolean]
 
   def map[B](f: A => B): Refreshable[F, B] = new Refreshable[F, B] {
-    implicit override protected def functor: Functor[F] = self.functor
     override def get: F[CachedValue[B]] = self.get.map(_.map(f))
+    override def updates: Stream[F, CachedValue[B]] = self.updates.map(_.map(f))
     override def cancel: F[Boolean] = self.cancel
     override def restart: F[Boolean] = self.restart
   }
 
   def mapK[G[_]: Functor](fk: F ~> G): Refreshable[G, A] =
     new Refreshable[G, A] {
-      override protected def functor: Functor[G] = implicitly
-
       override def get: G[CachedValue[A]] = fk(self.get)
+      override def updates: Stream[G, CachedValue[A]] =
+        self.updates.translate(fk)
       override def cancel: G[Boolean] = fk(self.cancel)
       override def restart: G[Boolean] = fk(self.restart)
     }
@@ -88,7 +90,7 @@ object Refreshable {
   def builder[F[_]: Temporal, A](refresh: F[A]): RefreshableBuilder[F, A] =
     RefreshableBuilder.builder(refresh)
 
-  trait Updates[F[_], A] extends Refreshable[F, A] { self =>
+  abstract class Updates[F[_]: Functor, A] extends Refreshable[F, A] { self =>
 
     /** Subscribe to discrete updates of the underlying value
       */
@@ -99,9 +101,6 @@ object Refreshable {
 
         override def updates: Stream[G, CachedValue[A]] =
           self.updates.translate(fk)
-
-        override protected def functor: Functor[G] = implicitly
-
         override def get: G[CachedValue[A]] = fk(self.get)
 
         override def cancel: G[Boolean] = fk(self.cancel)
@@ -111,9 +110,6 @@ object Refreshable {
 
     override def map[C](f: A => C): Refreshable.Updates[F, C] =
       new Refreshable.Updates[F, C] {
-
-        implicit override protected def functor: Functor[F] = self.functor
-
         override def get: F[CachedValue[C]] = self.get.map(_.map(f))
         override def cancel: F[Boolean] = self.cancel
         override def restart: F[Boolean] = self.restart
@@ -169,7 +165,10 @@ object Refreshable {
     *   call to `fa` fails. This will prevent the constructor from failing
     *   during startup
     */
-  class RefreshableBuilder[F[_]: Temporal, A] private[refreshable] (
+  sealed abstract class RefreshableBuilder[
+      F[_]: Temporal,
+      A
+  ] private[refreshable] (
       val refresh: F[A],
       val cacheDuration: A => FiniteDuration,
       val retryPolicy: A => RetryPolicy[F],
@@ -201,7 +200,7 @@ object Refreshable {
       exhaustedRetriesCallback,
       newValueCallback,
       defaultValue
-    )
+    ) {}
 
     def cacheDuration(
         cacheDuration: A => FiniteDuration
@@ -231,17 +230,6 @@ object Refreshable {
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
-    def withUpdates: UpdatesBuilder[F, A] =
-      new UpdatesBuilder[F, A](
-        refresh,
-        cacheDuration,
-        retryPolicy,
-        refreshFailureCallback,
-        exhaustedRetriesCallback,
-        newValueCallback,
-        defaultValue
-      )
-
     def resource: Resource[F, Refreshable[F, A]] = {
       val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
       for {
@@ -250,7 +238,7 @@ object Refreshable {
             fa.handleError(th => CachedValue.Error(default, th))
           )
         )
-        store <- Resource.eval(Ref.of[F, CachedValue[A]](a))
+        store <- Resource.eval(SignallingRef.of[F, CachedValue[A]](a))
         fiberStore <- Resource.eval(
           Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
         )
@@ -332,157 +320,15 @@ object Refreshable {
 
   }
 
-  /** Caches a single instance of type `A` for a period of time before
-    * refreshing it automatically.
-    *
-    * The time between refreshes is dynamic and based on the value of each `A`
-    * itself. This is similar to `RefreshableEffect` except that only exposes a
-    * fixed refresh frequency.
-    *
-    * As well as the time between refreshes, the retry policy is also dynamic
-    * and based on the value for `A`. This allows you to configure the policy
-    * based on when `A` is going to expire.
-    *
-    * You can use the `cacheDuration` and `retryPolicy` together to eagerly
-    * fetch a new value for `A` using the calculated cache duration minus some
-    * duration to allow for retries and then set the retry policy to retry
-    * throughout that duration.
-    *
-    * An old value is only made unavailable _after_ a new value has been
-    * acquired. This means that the time each value is exposed for is
-    * `cacheDuration` plus the time to evaluate `fa`.
-    *
-    * @param refresh
-    *   generate a new value of `A`
-    * @param cacheDuration
-    *   how long to cache a newly generated value of `A` for, if an effect is
-    *   needed to generate this duration it should have occurred in `fa`.
-    *   Defaults to [[defaultCacheDuration]] if not specified.
-    * @param retryPolicy
-    *   a function to derive a configuration object for attempting to retry the
-    *   effect of `fa` on failure from the current value of `A`. Defaults to
-    *   [[defaultRetryPolicy]] when not specified
-    * @param refreshFailureCallback
-    *   what to when an attempt to refresh the value fails, `fa` will be retried
-    *   according to `retryPolicy`
-    * @param exhaustedRetriesCallback
-    *   what to do if retrying to refresh the value fails. The refresh fiber
-    *   will have failed at this point and the value will grow stale. It is up
-    *   to user handle this failure, as they see fit, in their application
-    * @param newValueCallback
-    *   a callback invoked whenever a new value is generated, the
-    *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
-    *   waited before the next new value
-    * @param defaultValue
-    *   an optional default value to use when initialising the resource, if the
-    *   call to `fa` fails. This will prevent the constructor from failing
-    *   during startup
-    */
-  class UpdatesBuilder[F[_]: Temporal, A] private[refreshable] (
-      refresh: F[A],
-      cacheDuration: A => FiniteDuration,
-      retryPolicy: A => RetryPolicy[F],
-      refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
-        Unit
-      ]],
-      exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
-      newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
-      defaultValue: Option[A]
-  ) extends RefreshableBuilder[F, A](
-        refresh,
-        cacheDuration,
-        retryPolicy,
-        refreshFailureCallback,
-        exhaustedRetriesCallback,
-        newValueCallback,
-        defaultValue
-      ) { self =>
-
-    private def copy(
-        refresh: F[A] = self.refresh,
-        cacheDuration: A => FiniteDuration = self.cacheDuration,
-        retryPolicy: A => RetryPolicy[F] = self.retryPolicy,
-        refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
-          Unit
-        ]] = self.refreshFailureCallback,
-        exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]] =
-          self.exhaustedRetriesCallback,
-        newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
-          self.newValueCallback,
-        defaultValue: Option[A] = self.defaultValue
-    ): UpdatesBuilder[F, A] = new UpdatesBuilder[F, A](
-      refresh,
-      cacheDuration,
-      retryPolicy,
-      refreshFailureCallback,
-      exhaustedRetriesCallback,
-      newValueCallback,
-      defaultValue
-    )
-
-    override def cacheDuration(
-        cacheDuration: A => FiniteDuration
-    ): UpdatesBuilder[F, A] = copy(cacheDuration = cacheDuration)
-
-    override def retryPolicy(
-        retryPolicy: A => RetryPolicy[F]
-    ): UpdatesBuilder[F, A] = copy(retryPolicy = retryPolicy)
-
-    override def retryPolicy(
-        retryPolicy: RetryPolicy[F]
-    ): UpdatesBuilder[F, A] = copy(retryPolicy = _ => retryPolicy)
-
-    override def onRefreshFailure(
-        callback: PartialFunction[(Throwable, RetryDetails), F[Unit]]
-    ): UpdatesBuilder[F, A] =
-      copy(refreshFailureCallback = callback)
-
-    override def onExhaustedRetries(
-        callback: PartialFunction[Throwable, F[Unit]]
-    ): UpdatesBuilder[F, A] =
-      copy(exhaustedRetriesCallback = callback)
-
-    override def onNewValue(
-        callback: (A, FiniteDuration) => F[Unit]
-    ): UpdatesBuilder[F, A] = copy(newValueCallback = Some(callback))
-
-    override def defaultValue(
-        defaultValue: A
-    ): UpdatesBuilder[F, A] =
-      copy(defaultValue = Some(defaultValue))
-
-    override def withUpdates: UpdatesBuilder[F, A] = self
-
-    override def resource: Resource[F, Refreshable.Updates[F, A]] = {
-      val fa: F[CachedValue[A]] = refresh.map(CachedValue.Success(_))
-      for {
-        a <- Resource.eval[F, CachedValue[A]](
-          defaultValue.fold(fa)(default =>
-            fa.handleError(th => CachedValue.Error(default, th))
-          )
-        )
-        store <- Resource.eval(SignallingRef.of[F, CachedValue[A]](a))
-        fiberStore <- Resource.eval(
-          Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
-        )
-        _ <- runBackground(store, fiberStore)
-      } yield RefreshableImpl.RefreshableUpdatesImpl(
-        store,
-        fiberStore,
-        makeFiber(store)
-      )
-    }
-  }
-
   private class RefreshableImpl[F[_]: Concurrent, A] private (
-      val store: Ref[F, CachedValue[A]],
+      val store: SignallingRef[F, CachedValue[A]],
       val fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
       val makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
   ) extends Refreshable[F, A] {
 
-    override protected def functor: Functor[F] = implicitly
+    override val get: F[CachedValue[A]] = store.get
 
-    override def get: F[CachedValue[A]] = store.get
+    override val updates: Stream[F, CachedValue[A]] = store.discrete
 
     override val cancel: F[Boolean] = fiberStore
       .modify {
@@ -509,29 +355,10 @@ object Refreshable {
 
   private object RefreshableImpl {
     def apply[F[_]: Concurrent, A](
-        store: Ref[F, CachedValue[A]],
-        fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
-        makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
-    ): RefreshableImpl[F, A] = new RefreshableImpl(store, fiberStore, makeFiber)
-
-    private class RefreshableUpdatesImpl[F[_]: Concurrent, A] private (
         store: SignallingRef[F, CachedValue[A]],
         fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
         makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
-    ) extends RefreshableImpl[F, A](store, fiberStore, makeFiber)
-        with Refreshable.Updates[F, A] {
-
-      override val updates: Stream[F, CachedValue[A]] = store.discrete
-    }
-
-    object RefreshableUpdatesImpl {
-      def apply[F[_]: Concurrent, A](
-          store: SignallingRef[F, CachedValue[A]],
-          fiberStore: Ref[F, Option[Fiber[F, Throwable, Unit]]],
-          makeFiber: Deferred[F, Unit] => F[Fiber[F, Throwable, Unit]]
-      ): Refreshable.Updates[F, A] =
-        new RefreshableUpdatesImpl(store, fiberStore, makeFiber)
-    }
+    ): RefreshableImpl[F, A] = new RefreshableImpl(store, fiberStore, makeFiber)
   }
 
   private object RefreshableBuilder {
@@ -544,7 +371,7 @@ object Refreshable {
         exhaustedRetriesCallback = PartialFunction.empty,
         newValueCallback = None,
         defaultValue = None
-      )
+      ) {}
 
   }
 
