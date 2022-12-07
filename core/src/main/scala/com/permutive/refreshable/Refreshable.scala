@@ -131,7 +131,7 @@ object Refreshable {
     *   a callback invoked whenever a new value is generated, the
     *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
     *   waited before the next new value
-    * @param combine
+    * @param combineFunction
     *   a function which takes the old value and new value, returning some
     *   effectful value. This can be used to perform actions like accumulation
     *   of the underlying values or discarding new values that don't match some
@@ -153,7 +153,7 @@ object Refreshable {
       ]],
       val exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
       val newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
-      val combine: Option[(CachedValue[A], CachedValue[A]) => F[A]],
+      val combineFunction: Option[(CachedValue[A], CachedValue[A]) => F[A]],
       val defaultValue: Option[A]
   ) { self =>
 
@@ -189,8 +189,8 @@ object Refreshable {
           self.exhaustedRetriesCallback,
         newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
           self.newValueCallback,
-        newValueSelector: Option[(CachedValue[A], CachedValue[A]) => F[A]] =
-          self.combine,
+        combineFunction: Option[(CachedValue[A], CachedValue[A]) => F[A]] =
+          self.combineFunction,
         defaultValue: Option[A] = self.defaultValue
     ): RefreshableBuilder[F, A] = new RefreshableBuilder[F, A](
       refresh,
@@ -199,7 +199,7 @@ object Refreshable {
       refreshFailureCallback,
       exhaustedRetriesCallback,
       newValueCallback,
-      newValueSelector,
+      combineFunction,
       defaultValue
     ) {}
 
@@ -231,7 +231,7 @@ object Refreshable {
     def combine(
         combineFunction: (CachedValue[A], CachedValue[A]) => F[A]
     ): RefreshableBuilder[F, A] =
-      copy(newValueSelector = Some(combineFunction))
+      copy(combineFunction = Some(combineFunction))
 
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
@@ -257,7 +257,7 @@ object Refreshable {
         oldValue: CachedValue[A],
         newValue: CachedValue[A]
     ): F[Unit] =
-      combine.fold(store.set(newValue)) { f =>
+      combineFunction.fold(store.set(newValue)) { f =>
         f(oldValue, newValue).flatMap { v =>
           val value = newValue match {
             case CachedValue.Success(_)      => CachedValue.Success(v)
@@ -392,7 +392,7 @@ object Refreshable {
         refreshFailureCallback = PartialFunction.empty,
         exhaustedRetriesCallback = PartialFunction.empty,
         newValueCallback = None,
-        combine = None,
+        combineFunction = None,
         defaultValue = None
       ) {}
 
