@@ -131,7 +131,7 @@ object Refreshable {
     *   a callback invoked whenever a new value is generated, the
     *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
     *   waited before the next new value
-    * @param newValueSelector
+    * @param combine
     *   a function which takes the old value and new value, returning some
     *   effectful value. This can be used to perform actions like accumulation
     *   of the underlying values or discarding new values that don't match some
@@ -153,7 +153,7 @@ object Refreshable {
       ]],
       val exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
       val newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
-      val newValueSelector: Option[(A, A) => F[A]],
+      val combine: Option[(CachedValue[A], CachedValue[A]) => F[A]],
       val defaultValue: Option[A]
   ) { self =>
 
@@ -189,7 +189,8 @@ object Refreshable {
           self.exhaustedRetriesCallback,
         newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
           self.newValueCallback,
-        newValueSelector: Option[(A, A) => F[A]] = self.newValueSelector,
+        newValueSelector: Option[(CachedValue[A], CachedValue[A]) => F[A]] =
+          self.combine,
         defaultValue: Option[A] = self.defaultValue
     ): RefreshableBuilder[F, A] = new RefreshableBuilder[F, A](
       refresh,
@@ -227,8 +228,10 @@ object Refreshable {
         callback: (A, FiniteDuration) => F[Unit]
     ): RefreshableBuilder[F, A] = copy(newValueCallback = Some(callback))
 
-    def newValueSelector(selector: (A, A) => F[A]): RefreshableBuilder[F, A] =
-      copy(newValueSelector = Some(selector))
+    def combine(
+        combineFunction: (CachedValue[A], CachedValue[A]) => F[A]
+    ): RefreshableBuilder[F, A] =
+      copy(newValueSelector = Some(combineFunction))
 
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
@@ -251,11 +254,11 @@ object Refreshable {
 
     private def storeValue(
         store: Ref[F, CachedValue[A]],
-        oldValue: A,
+        oldValue: CachedValue[A],
         newValue: CachedValue[A]
     ): F[Unit] =
-      newValueSelector.fold(store.set(newValue)) { f =>
-        f(oldValue, newValue.value).flatMap { v =>
+      combine.fold(store.set(newValue)) { f =>
+        f(oldValue, newValue).flatMap { v =>
           val value = newValue match {
             case CachedValue.Success(_)      => CachedValue.Success(v)
             case CachedValue.Error(_, error) => CachedValue.Error(v, error)
@@ -270,7 +273,7 @@ object Refreshable {
     )(wait: Deferred[F, Unit]) = (wait.get >> store.get
       .flatMap(a =>
         refreshLoop(
-          a.value,
+          a,
           refresh,
           storeValue(store, _, _),
           cacheDuration,
@@ -299,9 +302,9 @@ object Refreshable {
       } yield ()).uncancelable
 
     private def refreshLoop(
-        initialA: A,
+        initialA: CachedValue[A],
         fa: F[A],
-        set: (A, CachedValue[A]) => F[Unit],
+        set: (CachedValue[A], CachedValue[A]) => F[Unit],
         cacheDuration: A => FiniteDuration,
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
         onNewValue: (A, FiniteDuration) => F[Unit],
@@ -334,7 +337,7 @@ object Refreshable {
         } yield ()
       }
 
-      innerLoop(initialA)
+      innerLoop(initialA.value)
     }
 
   }
@@ -389,7 +392,7 @@ object Refreshable {
         refreshFailureCallback = PartialFunction.empty,
         exhaustedRetriesCallback = PartialFunction.empty,
         newValueCallback = None,
-        newValueSelector = None,
+        combine = None,
         defaultValue = None
       ) {}
 
