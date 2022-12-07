@@ -17,11 +17,11 @@
 package com.permutive.refreshable
 
 import cats.arrow.FunctionK
-import cats.syntax.all._
 import cats.effect._
 import cats.effect.testkit.TestControl
-import retry._
+import cats.syntax.all._
 import munit.CatsEffectSuite
+import retry._
 
 import scala.concurrent.duration._
 
@@ -359,6 +359,30 @@ class RefreshableSuite extends CatsEffectSuite {
       TestControl.executeEmbed(run)
 
     }
+
+    test(s"${factory.name} - newValueSelector changes resulting value") {
+
+      val run =
+        factory
+          .resource[Int](
+            refresh = IO(1),
+            cacheDuration = _ => 2.seconds,
+            onRefreshFailure = { case _ =>
+              IO.unit
+            },
+            onExhaustedRetries = { case _ =>
+              IO.unit
+            },
+            combine = Some((oldV: CachedValue[Int], newV: CachedValue[Int]) =>
+              IO(oldV.value + newV.value)
+            )
+          )
+          .use { refreshable =>
+            IO.sleep(3.seconds) >> refreshable.value.assertEquals(2)
+          }
+
+      TestControl.executeEmbed(run)
+    }
   }
 
   suite(Default)
@@ -389,6 +413,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
         onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        combine: Option[(CachedValue[A], CachedValue[A]) => IO[A]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
     ): Resource[IO, Refreshable[IO, A]] = {
@@ -400,9 +425,11 @@ class RefreshableSuite extends CatsEffectSuite {
 
       val b2 = onNewValue.fold(b1)(v => b1.onNewValue(v))
 
-      val b3 = defaultValue.fold(b2)(v => b2.defaultValue(v))
+      val b3 = combine.fold(b2)(v => b2.combine(v))
 
-      retryPolicy.fold(b3)(v => b3.retryPolicy(v)).resource
+      val b4 = defaultValue.fold(b3)(v => b3.defaultValue(v))
+
+      retryPolicy.fold(b4)(v => b4.retryPolicy(v)).resource
     }
   }
 
@@ -416,6 +443,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
         onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        combine: Option[(CachedValue[A], CachedValue[A]) => IO[A]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
     ): Resource[IO, Refreshable[IO, A]] = {
@@ -427,9 +455,11 @@ class RefreshableSuite extends CatsEffectSuite {
 
       val b2 = onNewValue.fold(b1)(v => b1.onNewValue(v))
 
-      val b3 = defaultValue.fold(b2)(v => b2.defaultValue(v))
+      val b3 = combine.fold(b2)(v => b2.combine(v))
 
-      retryPolicy.fold(b3)(v => b3.retryPolicy(v)).resource
+      val b4 = defaultValue.fold(b3)(v => b3.defaultValue(v))
+
+      retryPolicy.fold(b4)(v => b4.retryPolicy(v)).resource
 
     }
   }
@@ -444,6 +474,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
         onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        combine: Option[(CachedValue[A], CachedValue[A]) => IO[A]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
     ): Resource[IO, Refreshable[IO, A]] = Default
@@ -453,6 +484,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onRefreshFailure,
         onExhaustedRetries,
         onNewValue,
+        combine,
         defaultValue,
         retryPolicy
       )
@@ -469,6 +501,7 @@ class RefreshableSuite extends CatsEffectSuite {
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), IO[Unit]],
         onExhaustedRetries: PartialFunction[Throwable, IO[Unit]],
         onNewValue: Option[(A, FiniteDuration) => IO[Unit]] = None,
+        combine: Option[(CachedValue[A], CachedValue[A]) => IO[A]] = None,
         defaultValue: Option[A] = None,
         retryPolicy: Option[RetryPolicy[IO]] = None
     ): Resource[IO, Refreshable[IO, A]]
