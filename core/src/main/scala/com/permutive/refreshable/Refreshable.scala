@@ -131,6 +131,11 @@ object Refreshable {
     *   a callback invoked whenever a new value is generated, the
     *   [[scala.concurrent.duration.FiniteDuration]] is the period that will be
     *   waited before the next new value
+    * @param newValueSelector
+    *   a function which takes the old value and new value, returning some
+    *   effectful value. This can be used to perform actions like accumulation
+    *   of the underlying values or discarding new values that don't match some
+    *   predicate
     * @param defaultValue
     *   an optional default value to use when initialising the resource, if the
     *   call to `fa` fails. This will prevent the constructor from failing
@@ -148,8 +153,30 @@ object Refreshable {
       ]],
       val exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
       val newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
+      val newValueSelector: Option[(A, A) => F[A]],
       val defaultValue: Option[A]
   ) { self =>
+
+    private[refreshable] def this(
+        refresh: F[A],
+        cacheDuration: A => FiniteDuration,
+        retryPolicy: A => RetryPolicy[F],
+        refreshFailureCallback: PartialFunction[(Throwable, RetryDetails), F[
+          Unit
+        ]],
+        exhaustedRetriesCallback: PartialFunction[Throwable, F[Unit]],
+        newValueCallback: Option[(A, FiniteDuration) => F[Unit]],
+        defaultValue: Option[A]
+    ) = this(
+      refresh,
+      cacheDuration,
+      retryPolicy,
+      refreshFailureCallback,
+      exhaustedRetriesCallback,
+      newValueCallback,
+      None,
+      defaultValue
+    )
 
     private def copy(
         refresh: F[A] = self.refresh,
@@ -162,6 +189,7 @@ object Refreshable {
           self.exhaustedRetriesCallback,
         newValueCallback: Option[(A, FiniteDuration) => F[Unit]] =
           self.newValueCallback,
+        newValueSelector: Option[(A, A) => F[A]] = self.newValueSelector,
         defaultValue: Option[A] = self.defaultValue
     ): RefreshableBuilder[F, A] = new RefreshableBuilder[F, A](
       refresh,
@@ -170,6 +198,7 @@ object Refreshable {
       refreshFailureCallback,
       exhaustedRetriesCallback,
       newValueCallback,
+      newValueSelector,
       defaultValue
     ) {}
 
@@ -198,6 +227,9 @@ object Refreshable {
         callback: (A, FiniteDuration) => F[Unit]
     ): RefreshableBuilder[F, A] = copy(newValueCallback = Some(callback))
 
+    def newValueSelector(selector: (A, A) => F[A]): RefreshableBuilder[F, A] =
+      copy(newValueSelector = Some(selector))
+
     def defaultValue(defaultValue: A): RefreshableBuilder[F, A] =
       copy(defaultValue = Some(defaultValue))
 
@@ -217,6 +249,22 @@ object Refreshable {
       } yield RefreshableImpl(store, fiberStore, makeFiber(store))
     }
 
+    private def storeValue(
+        store: Ref[F, CachedValue[A]],
+        oldValue: A,
+        newValue: CachedValue[A]
+    ): F[Unit] =
+      newValueSelector.fold(store.set(newValue)) { f =>
+        f(oldValue, newValue.value).flatMap { v =>
+          val value = newValue match {
+            case CachedValue.Success(_)      => CachedValue.Success(v)
+            case CachedValue.Error(_, error) => CachedValue.Error(v, error)
+            case CachedValue.Cancelled(_)    => CachedValue.Cancelled(v)
+          }
+          store.set(value)
+        }
+      }
+
     protected def makeFiber(
         store: Ref[F, CachedValue[A]]
     )(wait: Deferred[F, Unit]) = (wait.get >> store.get
@@ -224,7 +272,7 @@ object Refreshable {
         refreshLoop(
           a.value,
           refresh,
-          store.set(_),
+          storeValue(store, _, _),
           cacheDuration,
           refreshFailureCallback,
           newValueCallback.getOrElse((_, _) => Applicative[F].unit),
@@ -253,7 +301,7 @@ object Refreshable {
     private def refreshLoop(
         initialA: A,
         fa: F[A],
-        set: CachedValue[A] => F[Unit],
+        set: (A, CachedValue[A]) => F[Unit],
         cacheDuration: A => FiniteDuration,
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
         onNewValue: (A, FiniteDuration) => F[Unit],
@@ -261,7 +309,7 @@ object Refreshable {
     ): F[Unit] = {
       def innerLoop(currentA: A): F[Unit] = {
         val faError = fa.onError { case th =>
-          set(CachedValue.Error(currentA, th))
+          set(initialA, CachedValue.Error(currentA, th))
         }
 
         val retryFa =
@@ -281,7 +329,7 @@ object Refreshable {
           // though; for example we'd need to handle the case of failing to acquire a new value ensuring consumers do not
           // block on an empty deferred forever.
           newA <- retryFa
-          _ <- set(CachedValue.Success(newA))
+          _ <- set(initialA, CachedValue.Success(newA))
           _ <- innerLoop(newA)
         } yield ()
       }
@@ -341,6 +389,7 @@ object Refreshable {
         refreshFailureCallback = PartialFunction.empty,
         exhaustedRetriesCallback = PartialFunction.empty,
         newValueCallback = None,
+        newValueSelector = None,
         defaultValue = None
       ) {}
 
