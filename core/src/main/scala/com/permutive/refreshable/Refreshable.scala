@@ -19,7 +19,7 @@ package com.permutive.refreshable
 import cats.effect._
 import cats.effect.syntax.all._
 import cats.syntax.all._
-import cats.{~>, Applicative, Functor}
+import cats.{Applicative, FlatMap, Functor, ~>}
 import fs2.Stream
 import fs2.concurrent.SignallingRef
 import retry._
@@ -309,8 +309,8 @@ object Refreshable {
         onRefreshFailure: PartialFunction[(Throwable, RetryDetails), F[Unit]],
         onNewValue: (A, FiniteDuration) => F[Unit],
         retryPolicy: A => RetryPolicy[F]
-    ): F[Unit] = {
-      def innerLoop(currentA: A): F[Unit] = {
+    ): F[Unit] =
+      FlatMap[F].tailRecM[A, Unit](initialA.value) { currentA =>
         val faError = fa.onError { case th =>
           set(initialA, CachedValue.Error(currentA, th))
         }
@@ -333,13 +333,8 @@ object Refreshable {
           // block on an empty deferred forever.
           newA <- retryFa
           _ <- set(initialA, CachedValue.Success(newA))
-          _ <- innerLoop(newA)
-        } yield ()
+        } yield Left(newA)
       }
-
-      innerLoop(initialA.value)
-    }
-
   }
 
   private class RefreshableImpl[F[_]: Concurrent, A] private (
