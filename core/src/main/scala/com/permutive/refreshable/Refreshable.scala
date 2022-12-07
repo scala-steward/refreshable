@@ -135,7 +135,11 @@ object Refreshable {
     *   a function which takes the old value and new value, returning some
     *   effectful value. This can be used to perform actions like accumulation
     *   of the underlying values or discarding new values that don't match some
-    *   predicate
+    *   predicate. A failure in the returned `F[A]` will result in the value not
+    *   being updated, now will it trigger the `refreshFailureCallback` as a
+    *   failure in this function is nothing to do with the internals of
+    *   `Refreshable` and should be handled properly by the caller, however the
+    *   value in the store will be set to a [[CachedValue.Error]]
     * @param defaultValue
     *   an optional default value to use when initialising the resource, if the
     *   call to `fa` fails. This will prevent the constructor from failing
@@ -258,14 +262,23 @@ object Refreshable {
         newValue: CachedValue[A]
     ): F[Unit] =
       combineFunction.fold(store.set(newValue)) { f =>
-        f(oldValue, newValue).flatMap { v =>
-          val value = newValue match {
-            case CachedValue.Success(_)      => CachedValue.Success(v)
-            case CachedValue.Error(_, error) => CachedValue.Error(v, error)
-            case CachedValue.Cancelled(_)    => CachedValue.Cancelled(v)
+        f(oldValue, newValue)
+          .flatMap { v =>
+            val value = newValue match {
+              case CachedValue.Success(_)      => CachedValue.Success(v)
+              case CachedValue.Error(_, error) => CachedValue.Error(v, error)
+              case CachedValue.Cancelled(_)    => CachedValue.Cancelled(v)
+            }
+            store.set(value)
           }
-          store.set(value)
-        }
+          // Any error from `f` will result in the value not being updated
+          // the user should handle errors in the function themselves.
+          // The `onRefreshFailure` callback will not be called here as any
+          // error arising from this is the user's responsibility and not
+          // anything to do with the `Refreshable`'s internals.
+          .handleErrorWith(th =>
+            store.set(CachedValue.Error(oldValue.value, th))
+          )
       }
 
     protected def makeFiber(
