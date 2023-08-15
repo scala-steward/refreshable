@@ -27,7 +27,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
   .settings(
     name := "refreshable",
     libraryDependencies ++= Seq(
-      "org.typelevel" %%% "cats-core" % "2.9.0",
+      "org.typelevel" %%% "cats-core" % "2.10.0",
       "org.typelevel" %%% "cats-effect" % "3.4.1",
       "co.fs2" %%% "fs2-core" % "3.4.0",
       "com.github.cb372" %%% "cats-retry" % "3.1.0",
