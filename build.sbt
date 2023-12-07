@@ -15,7 +15,7 @@ ThisBuild / tlSonatypeUseLegacyHost := true
 // publish website from this branch
 ThisBuild / tlSitePublishBranch := Some("main")
 
-val Scala213 = "2.13.10"
+val Scala213 = "2.13.12"
 ThisBuild / crossScalaVersions := Seq(Scala213, "3.2.0", "2.12.17")
 ThisBuild / scalaVersion := Scala213 // the default Scala
 
@@ -27,9 +27,9 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
   .settings(
     name := "refreshable",
     libraryDependencies ++= Seq(
-      "org.typelevel" %%% "cats-core" % "2.9.0",
+      "org.typelevel" %%% "cats-core" % "2.10.0",
       "org.typelevel" %%% "cats-effect" % "3.4.1",
-      "co.fs2" %%% "fs2-core" % "3.4.0",
+      "co.fs2" %%% "fs2-core" % "3.9.3",
       "com.github.cb372" %%% "cats-retry" % "3.1.0",
       "org.scalameta" %%% "munit" % "0.7.29" % Test,
       "org.typelevel" %%% "munit-cats-effect-3" % "1.0.7" % Test,
